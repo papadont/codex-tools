@@ -1,0 +1,16 @@
+{
+  "name": "codex-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared tooling for Codex app workflows",
+  "main": "scripts/save_firestore_memo.js",
+  "scripts": {
+    "memo:save": "node scripts/save_firestore_memo.js",
+    "memo:thread": "node scripts/save_thread_memo.js",
+    "memo:web": "node scripts/codex_memo_web_server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "firebase-admin": "^12.7.0"
+  }
+}

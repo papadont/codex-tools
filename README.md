@@ -69,6 +69,24 @@ npm run memo:thread -- \
   --body "次スレでやること"
 ```
 
+## codex-memo 管理Webアプリ
+
+Firestoreの `codex-memo` collection を閲覧/編集/削除/ダウンロードできるローカルWeb UI。
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="/absolute/path/service-account.json"
+npm run memo:web
+```
+
+起動後:
+
+- [http://localhost:4173](http://localhost:4173)
+- 機能:
+  - 一覧・検索
+  - 新規作成・編集・削除
+  - ダウンロード (`txt` / `md` / `json`)
+  - 共有（Web Share API, LINE送信導線）
+
 ## グローバル導入
 
 ```bash

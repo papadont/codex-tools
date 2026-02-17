@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>codex-memo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  </head>
+  <body class="min-h-screen bg-[#f7f5f1] p-2 text-[#4b5568]">
+    <div class="mx-auto min-h-[calc(100vh-1rem)] max-w-[1320px] overflow-hidden rounded-2xl border border-[#ebe7e0] bg-[#fffefd]">
+      <header class="flex items-center gap-2 overflow-x-auto border-b border-[#f1ece4] bg-[#fffefd] px-3 py-1.5 whitespace-nowrap">
+        <h1 id="appTitle" class="ml-3 mr-2 cursor-pointer select-none text-sm font-semibold text-[#5e6f8d]" title="Double-click to reload">codex-memo</h1>
+        <input id="qInput" type="search" placeholder="Search" class="h-7 w-[210px] rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
+        <input id="projectInput" type="search" placeholder="projectName" class="h-7 w-[210px] rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
+        <div class="ml-1 flex items-center gap-2">
+          <select id="typeSelect" class="h-7 w-[150px] rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
+            <option value="">All types</option>
+            <option value="memo">memo</option>
+            <option value="handover memo">handover memo</option>
+            <option value="propomemo">propomemo</option>
+            <option value="keep">keep</option>
+          </select>
+          <button id="newBtn" type="button" class="ml-6 h-7 rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">New</button>
+          <button id="saveBtn" type="button" class="h-7 rounded-lg border border-[#6e84ad] bg-[#6e84ad] px-2 text-xs text-[#f7f9ff] hover:brightness-95">Save</button>
+          <button id="deleteBtn" type="button" class="h-7 rounded-lg border border-[#cf7896] bg-[#cf7896] px-2 text-xs text-[#fff7fb] hover:brightness-95">Delete</button>
+        </div>
+      </header>
+
+      <main class="grid h-[calc(100vh-74px)] grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)]">
+        <aside class="overflow-auto border-b border-[#ebe4d9] bg-[#fbf8f3] p-3 md:border-b-0 md:border-r">
+          <ul id="memoList" class="space-y-1"></ul>
+        </aside>
+
+        <section class="relative flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden overflow-y-auto bg-[#fefcf9] px-4 pb-1 pt-2">
+          <div class="absolute right-4 top-2 z-10 text-right text-[11px] text-[#7a8398]">
+            <span id="dateText" class="block">-</span>
+          </div>
+          <div class="mb-2 flex flex-wrap items-end gap-2">
+            <div class="w-full md:w-[210px]">
+              <label for="projectNameInput" class="mb-1 block text-[11px] text-[#7a8398]">projectName</label>
+              <input id="projectNameInput" type="text" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
+            </div>
+            <div class="w-full md:w-[140px]">
+              <label for="memoTypeInput" class="mb-1 block text-[11px] text-[#7a8398]">memoType</label>
+              <select id="memoTypeInput" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
+                <option value="memo">memo</option>
+                <option value="handover memo">handover memo</option>
+                <option value="propomemo">propomemo</option>
+                <option value="keep">keep</option>
+              </select>
+            </div>
+            <div class="w-full md:w-[210px]">
+              <label for="downloadFormatSelect" class="mb-1 block text-[11px] text-[#7a8398]">download</label>
+              <div class="flex items-center gap-2">
+                <select id="downloadFormatSelect" aria-label="Download format" class="h-7 w-[72px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
+                <option value="txt">txt</option>
+                <option value="md">md</option>
+                <option value="json">json</option>
+                </select>
+                <button id="downloadBtn" type="button" class="h-7 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">download</button>
+                <button id="shareBtn" type="button" class="h-7 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">share</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-1 flex items-center gap-2">
+            <label for="threadTitleInput" class="whitespace-nowrap text-[11px] text-[#7a8398]">thread</label>
+            <div class="flex-1">
+              <input id="threadTitleInput" type="text" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
+            </div>
+            <select id="bodyModeSelect" aria-label="Body mode" class="h-7 w-[110px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
+              <option value="text">Text</option>
+              <option value="preview" selected>Preview</option>
+            </select>
+          </div>
+
+          <div class="relative mt-0.5 flex min-h-0 flex-1 flex-col">
+            <div class="absolute right-1 top-1 z-10 flex items-center gap-2">
+              <button id="copyBodyBtn" type="button" aria-label="Copy body" class="h-7 w-7 rounded-md border border-[#d4d8e0] bg-[#fefdfb] p-1 hover:border-[#7f90b0]">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="h-full w-full fill-none stroke-[#6e7d99]" stroke-width="1.8">
+                  <rect x="9" y="7" width="10" height="10" rx="2"></rect>
+                  <rect x="5" y="3" width="10" height="10" rx="2"></rect>
+                </svg>
+              </button>
+            </div>
+            <textarea id="memoBodyInput" rows="14" class="h-full min-h-0 flex-1 resize-y rounded-xl border border-[#d4d8e0] bg-[#fefdfb] px-2 py-2 text-sm outline-none focus:border-[#7f90b0]"></textarea>
+            <article id="memoPreview" class="markdown-preview hidden h-full min-h-0 flex-1 overflow-auto rounded-xl border border-[#d4d8e0] bg-[#fefdfb] px-3 py-2 text-sm"></article>
+          </div>
+
+          <p id="status" class="pointer-events-none absolute bottom-1 left-4 right-4 m-0 h-3 overflow-hidden whitespace-nowrap text-[9px] leading-3 text-[#5d79a8]"></p>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
