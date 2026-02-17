@@ -16,6 +16,9 @@
   - `現スレッドで対応した内容`
   - `現スレッドで取り決めした事項`
   - `次スレで何をするか`
+- For `次回予告`, output body in Markdown format.
+- Playful "anime next-episode preview" flavor is allowed if it does not reduce clarity.
+- Append a short closing message to the user at the end of the memo body.
 - Unless explicitly provided by the user:
   - `projectName`: current workspace directory name
   - `threadTitle`: first 40 chars of memo body
