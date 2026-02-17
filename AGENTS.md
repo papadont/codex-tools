@@ -11,6 +11,11 @@
   - `メモ保存`: save as `memo`
   - `引継ぎメモ保存` or `handover memo 保存`: save as `handover memo`
   - `提案メモ保存` or `propomemo 保存`: save as `propomemo`
+  - `次回予告`: save as `handover memo` with a compact summary for next thread
+- For `次回予告`, the memo body must include these 3 sections:
+  - `現スレッドで対応した内容`
+  - `現スレッドで取り決めした事項`
+  - `次スレで何をするか`
 - Unless explicitly provided by the user:
   - `projectName`: current workspace directory name
   - `threadTitle`: first 40 chars of memo body
