@@ -28,7 +28,7 @@
         </div>
       </header>
 
-      <main class="grid h-[calc(100vh-74px)] grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)]">
+      <main class="relative grid h-[calc(100vh-74px)] grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)]">
         <aside class="overflow-auto border-b border-[#ebe4d9] bg-[#fbf8f3] p-3 md:border-b-0 md:border-r">
           <ul id="memoList" class="space-y-1"></ul>
         </aside>
@@ -89,8 +89,8 @@
             <article id="memoPreview" class="markdown-preview hidden h-full min-h-0 flex-1 overflow-auto rounded-xl border border-[#d4d8e0] bg-[#fefdfb] px-3 py-2 text-sm"></article>
           </div>
 
-          <p id="status" class="pointer-events-none absolute bottom-1 left-4 right-4 m-0 h-3 overflow-hidden whitespace-nowrap text-[9px] leading-3 text-[#5d79a8]"></p>
         </section>
+        <p id="status" class="pointer-events-none fixed bottom-[12px] left-[12px] right-0 z-50 m-0 h-3 overflow-hidden whitespace-nowrap px-[21px] text-[9px] leading-3 text-[#5d79a8] md:pl-[321px]"></p>
       </main>
     </div>
 

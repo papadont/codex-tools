@@ -83,6 +83,9 @@ function assertExclusiveFlags(pinned, deletable) {
 }
 
 function assertDeleteAllowed(current, confirmToken) {
+  if (Boolean(current.pinned)) {
+    throw new Error("Delete blocked. Unpin this memo before delete.");
+  }
   if (!Boolean(current.deletable)) {
     throw new Error("Delete blocked. Set deletable=true before delete.");
   }

@@ -480,6 +480,10 @@ async function deleteSelectedMemo() {
     setStatus("Selected memo is missing", true);
     return;
   }
+  if (selected.pinned) {
+    setStatus("Delete blocked: unpin first", true);
+    return;
+  }
   if (!selected.deletable) {
     const promote = window.confirm("DEL is off. Turn DEL on and delete this selected memo?");
     if (!promote) {
@@ -518,7 +522,7 @@ async function deleteSelectedMemo() {
 }
 
 async function deleteAllDeletableMemos() {
-  const targets = state.items.filter((memo) => Boolean(memo.deletable));
+  const targets = state.items.filter((memo) => Boolean(memo.deletable) && !Boolean(memo.pinned));
   if (targets.length === 0) {
     setStatus("No deletable docs", true);
     return;

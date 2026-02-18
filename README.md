@@ -144,11 +144,14 @@ Keep going:
 ## What we will do next
 - （次アクション）
 
-## Other agreed items
+## Other agreed items and more..
 - （合意済みルール）
+- （取り決め事項以外のその他引き継ぎ事項があればここ）
 
 メモ:
 - 実行トリガー語は説明時にバッククォートで囲む（例: `メモ保存`）。
+
+先輩へ: （ここに短い締めメッセージ）
 ```
 
 ## グローバル導入

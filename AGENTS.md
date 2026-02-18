@@ -16,9 +16,12 @@
   - `現スレッドで対応した内容`
   - `現スレッドで取り決めした事項`
   - `次スレで何をするか`
+- If there are handover notes beyond agreements, add this section:
+  - `Other agreed items and more..`
 - For `次回予告`, output body in Markdown format.
 - Playful "anime next-episode preview" flavor is allowed if it does not reduce clarity.
 - Append a short closing message to the user at the end of the memo body.
+- Insert one blank line before the closing message to the user.
 - For `次回予告` and handover bodies, avoid unintended trigger execution:
   - Keep the first line as `Keep going:`
   - Do not include raw trigger words as imperative lines; when referencing them, wrap in backticks (e.g. `メモ保存`)
