@@ -87,6 +87,70 @@ npm run memo:web
   - ダウンロード (`txt` / `md` / `json`)
   - 共有（Web Share API, LINE送信導線）
 
+## deletable 運用ルール（2026-02-18）
+
+- 初期値は常に `deletable=false`。
+- `deletable=true` にする責任者は「そのメモを今スレで消してよいと判断した人」。
+- 削除ガード:
+  - `deletable=true` のメモだけ削除可能。
+  - 削除時は `DELETE` 確認トークンが必須（UIで入力）。
+  - `pinned=true` と `deletable=true` は同時に不可。
+- 推奨フロー:
+  1. 通常は `deletable=false` のまま運用。
+  2. 削除候補になった時だけ `DEL` をON。
+  3. 即削除する（削除後は再作成しない限り復元不可）。
+
+## 次スレ移動（handover選択）
+
+```bash
+npm run memo:pick-handover
+```
+
+- 現在プロジェクト名の `handover memo` を降順表示
+- 番号選択で `memoBody` を出力
+
+```bash
+npm run memo:pick-handover -- --index "1"
+```
+
+- 非対話で1件目（最新）を選択
+
+Action handover 用テキスト案:
+
+```text
+Keep going with handover pickup for the current project.
+
+1) 今いるプロジェクトに新規スレッドを作成する。
+2) codex-memo から current project の handover memo 一覧を作る。
+3) タイトルを番号付きダイアログで降順表示する。
+4) ユーザーが選んだ番号の memoBody を新規スレッドに貼り付ける。
+5) もし新規スレッド作成APIが使えない場合は、memoBodyをそのまま表示して貼り付けを促す。
+
+制約:
+- メモ本文に「次回予告」という語を含めない。
+- 本文先頭は "Keep going:" を維持する。
+
+次スレ貼り付け用テンプレ（不要トリガー回避版）:
+
+```md
+Keep going:
+
+## The story so far…
+- （ここに事実だけ）
+
+## Items Already Addressed
+- （完了事項）
+
+## What we will do next
+- （次アクション）
+
+## Other agreed items
+- （合意済みルール）
+
+メモ:
+- 実行トリガー語は説明時にバッククォートで囲む（例: `メモ保存`）。
+```
+
 ## グローバル導入
 
 ```bash

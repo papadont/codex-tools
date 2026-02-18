@@ -3,7 +3,8 @@ const state = {
   selectedId: null,
   hasInitialAutoSelection: false,
   lastResponseCacheHit: false,
-  selectedCacheHit: false
+  selectedCacheHit: false,
+  showOnlyDeletable: false
 };
 
 const el = {
@@ -47,7 +48,7 @@ function setStatus(message, isError = false, tone = "default") {
     el.status.classList.add("text-[#c96f8a]");
     return;
   }
-  if (selectedMemo && selectedMemo.deletable) {
+  if (tone !== "force" && selectedMemo && selectedMemo.deletable) {
     el.status.textContent = `Deletable: ${selectedMemo.id}`;
     el.status.classList.add("text-[#cf7896]");
     return;
@@ -157,9 +158,20 @@ function sortMemosForList(items) {
   });
 }
 
+function listItemsForView() {
+  if (!state.showOnlyDeletable) {
+    return state.items;
+  }
+  return state.items.filter((item) => Boolean(item.deletable));
+}
+
+function syncDeleteButtonLabel() {
+  el.deleteBtn.textContent = state.showOnlyDeletable ? "ALL" : "Delete";
+}
+
 function renderList() {
   el.memoList.innerHTML = "";
-  const items = sortMemosForList(state.items);
+  const items = sortMemosForList(listItemsForView());
 
   for (const item of items) {
     const li = document.createElement("li");
@@ -287,7 +299,11 @@ function fillEditor(item, options = {}) {
   el.dateText.textContent = renderDateWithCacheIndicator(
     item?.updatedAtISO || item?.createdAtISO || item?.datetimeISO
   );
-  el.deleteBtn.disabled = !state.selectedId;
+  el.deleteBtn.disabled = false;
+  syncDeleteButtonLabel();
+  el.deleteBtn.title = state.showOnlyDeletable
+    ? "ALL: delete all deletable docs (Shift: filter off)"
+    : "ALL: delete all deletable docs (Shift: filter on)";
   updateBodyMode();
   renderList();
   setStatus("");
@@ -379,22 +395,34 @@ async function toggleDeletable(item) {
   }
 }
 
-async function loadMemos() {
+async function loadMemos(options = {}) {
   try {
+    const forceReload = Boolean(options.forceReload);
+    const selectFirst = Boolean(options.selectFirst);
     const params = new URLSearchParams();
     if (el.qInput.value.trim()) params.set("q", el.qInput.value.trim());
     if (el.projectInput.value.trim()) params.set("projectName", el.projectInput.value.trim());
     if (el.typeSelect.value) params.set("memoType", el.typeSelect.value);
     params.set("limit", "300");
+    if (forceReload) params.set("nocache", "1");
 
     const data = await request(`/api/memos?${params.toString()}`);
     state.items = data.items || [];
     const listFromCache = state.lastResponseCacheHit;
-    if (!state.selectedId && !state.hasInitialAutoSelection && state.items.length > 0) {
-      const sorted = sortMemosForList(state.items);
+    const visibleItems = sortMemosForList(listItemsForView());
+    if (selectFirst && visibleItems.length > 0) {
+      fillEditor(visibleItems[0], { fromCache: listFromCache });
+      state.hasInitialAutoSelection = true;
+      return;
+    }
+    if (!state.selectedId && !state.hasInitialAutoSelection && visibleItems.length > 0) {
+      const sorted = visibleItems;
       fillEditor(sorted[0], { fromCache: listFromCache });
       state.hasInitialAutoSelection = true;
       return;
+    }
+    if (state.selectedId && !state.items.some((memo) => memo.id === state.selectedId)) {
+      state.selectedId = null;
     }
     renderList();
   } catch (error) {
@@ -442,20 +470,101 @@ async function saveMemo() {
   }
 }
 
-async function deleteMemo() {
-  if (!state.selectedId) return;
-  const ok = window.confirm("Delete this memo?");
-  if (!ok) return;
+async function deleteSelectedMemo() {
+  if (!state.selectedId) {
+    setStatus("Select a memo to delete", true);
+    return;
+  }
+  const selected = state.items.find((memo) => memo.id === state.selectedId);
+  if (!selected) {
+    setStatus("Selected memo is missing", true);
+    return;
+  }
+  if (!selected.deletable) {
+    const promote = window.confirm("DEL is off. Turn DEL on and delete this selected memo?");
+    if (!promote) {
+      setStatus("Delete cancelled", true);
+      return;
+    }
+    try {
+      const promoted = await request(`/api/memos/${encodeURIComponent(selected.id)}/deletable`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deletable: true })
+      });
+      applyUpdatedMemo(promoted.item);
+    } catch (error) {
+      setStatus(`DEL enable error: ${error.message}`, true);
+      return;
+    }
+  }
+  const ok = window.confirm(`Delete selected memo? (${selected.id})`);
+  if (!ok) {
+    setStatus("Delete cancelled", true);
+    return;
+  }
 
   try {
-    await request(`/api/memos/${encodeURIComponent(state.selectedId)}`, { method: "DELETE" });
-    const deletedId = state.selectedId;
+    await request(`/api/memos/${encodeURIComponent(selected.id)}`, {
+      method: "DELETE",
+      headers: { "x-codex-delete-confirm": "DELETE" }
+    });
     fillEditor(null);
-    await loadMemos();
-    setStatus(`Deleted: ${deletedId}`);
+    await loadMemos({ forceReload: true, selectFirst: true });
+    setStatus(`Deleted: ${selected.id}`, false, "force");
   } catch (error) {
     setStatus(`Delete error: ${error.message}`, true);
   }
+}
+
+async function deleteAllDeletableMemos() {
+  const targets = state.items.filter((memo) => Boolean(memo.deletable));
+  if (targets.length === 0) {
+    setStatus("No deletable docs", true);
+    return;
+  }
+  const ok = window.confirm(`Delete all deletable docs? (${targets.length})`);
+  if (!ok) {
+    setStatus("Bulk delete cancelled", true);
+    return;
+  }
+
+  try {
+    for (const memo of targets) {
+      await request(`/api/memos/${encodeURIComponent(memo.id)}`, {
+        method: "DELETE",
+        headers: { "x-codex-delete-confirm": "DELETE" }
+      });
+    }
+    const deletedCount = targets.length;
+    state.showOnlyDeletable = false;
+    syncDeleteButtonLabel();
+    fillEditor(null);
+    await loadMemos({ forceReload: true, selectFirst: true });
+    setStatus(`Deleted ${deletedCount} deletable docs`, false, "force");
+  } catch (error) {
+    setStatus(`Delete error: ${error.message}`, true);
+  }
+}
+
+async function deleteMemo(ev) {
+  if (ev && ev.shiftKey) {
+    state.showOnlyDeletable = !state.showOnlyDeletable;
+    syncDeleteButtonLabel();
+    renderList();
+    setStatus(
+      state.showOnlyDeletable ? "Mode: ALL (deletable only)" : "Mode: Delete (all docs)",
+      false,
+      "force"
+    );
+    return;
+  }
+
+  if (state.showOnlyDeletable) {
+    await deleteAllDeletableMemos();
+    return;
+  }
+  await deleteSelectedMemo();
 }
 
 function downloadMemo(format) {

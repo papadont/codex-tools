@@ -82,6 +82,15 @@ function assertExclusiveFlags(pinned, deletable) {
   }
 }
 
+function assertDeleteAllowed(current, confirmToken) {
+  if (!Boolean(current.deletable)) {
+    throw new Error("Delete blocked. Set deletable=true before delete.");
+  }
+  if (String(confirmToken || "").trim().toUpperCase() !== "DELETE") {
+    throw new Error('Delete confirmation token is required. Use "DELETE".');
+  }
+}
+
 function toMemoDto(doc) {
   const data = doc.data() || {};
   const datetime = data.datetime && typeof data.datetime.toDate === "function"
@@ -155,12 +164,15 @@ async function main() {
       const projectName = String(req.query.projectName || "").trim().toLowerCase();
       const memoType = String(req.query.memoType || "").trim().toLowerCase();
       const q = String(req.query.q || "").trim().toLowerCase();
+      const noCache = String(req.query.nocache || "").trim() === "1";
       const cacheKey = `list:${JSON.stringify({ limit, projectName, memoType, q })}`;
-      const cached = getCache(cacheKey);
-      if (cached) {
-        res.setHeader("X-Cache", "HIT");
-        res.json(cached);
-        return;
+      if (!noCache) {
+        const cached = getCache(cacheKey);
+        if (cached) {
+          res.setHeader("X-Cache", "HIT");
+          res.json(cached);
+          return;
+        }
       }
 
       const snap = await db
@@ -188,7 +200,9 @@ async function main() {
       }
 
       const payload = { items: memos };
-      setCache(cacheKey, payload);
+      if (!noCache) {
+        setCache(cacheKey, payload);
+      }
       res.setHeader("X-Cache", "MISS");
       res.json(payload);
     } catch (error) {
@@ -292,11 +306,14 @@ async function main() {
         res.status(404).json({ error: "Memo not found." });
         return;
       }
+      const current = exists.data() || {};
+      const confirmToken = req.get("x-codex-delete-confirm") || req.query.confirm;
+      assertDeleteAllowed(current, confirmToken);
       await ref.delete();
       clearCache();
       res.json({ ok: true });
     } catch (error) {
-      res.status(500).json({ error: error.message || "Failed to delete memo." });
+      res.status(400).json({ error: error.message || "Failed to delete memo." });
     }
   });
 

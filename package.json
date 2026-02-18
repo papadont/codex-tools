@@ -7,7 +7,8 @@
   "scripts": {
     "memo:save": "node scripts/save_firestore_memo.js",
     "memo:thread": "node scripts/save_thread_memo.js",
-    "memo:web": "node scripts/codex_memo_web_server.js"
+    "memo:web": "node scripts/codex_memo_web_server.js",
+    "memo:pick-handover": "node scripts/pick_handover_memo.js"
   },
   "dependencies": {
     "express": "^4.21.2",

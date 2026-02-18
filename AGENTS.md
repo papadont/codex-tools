@@ -19,6 +19,9 @@
 - For `次回予告`, output body in Markdown format.
 - Playful "anime next-episode preview" flavor is allowed if it does not reduce clarity.
 - Append a short closing message to the user at the end of the memo body.
+- For `次回予告` and handover bodies, avoid unintended trigger execution:
+  - Keep the first line as `Keep going:`
+  - Do not include raw trigger words as imperative lines; when referencing them, wrap in backticks (e.g. `メモ保存`)
 - Unless explicitly provided by the user:
   - `projectName`: current workspace directory name
   - `threadTitle`: first 40 chars of memo body
