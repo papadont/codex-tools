@@ -17,7 +17,7 @@ const el = {
   projectNameInput: document.getElementById("projectNameInput"),
   memoTypeInput: document.getElementById("memoTypeInput"),
   threadTitleInput: document.getElementById("threadTitleInput"),
-  bodyModeSelect: document.getElementById("bodyModeSelect"),
+  bodyModeToggle: document.getElementById("bodyModeToggle"),
   memoBodyInput: document.getElementById("memoBodyInput"),
   memoPreview: document.getElementById("memoPreview"),
   dateText: document.getElementById("dateText"),
@@ -126,6 +126,10 @@ function renderMarkdownPreview() {
     n.style.margin = "0.25em 0";
     n.style.paddingLeft = "1.25em";
   });
+  // Keep one visible blank-line feel before closing messages after bullet lists.
+  preview.querySelectorAll("ul + p, ol + p").forEach((n) => {
+    n.style.marginTop = "0.9em";
+  });
   preview.querySelectorAll("code").forEach((n) => {
     n.style.background = "#e5e7eb";
     n.style.borderRadius = "4px";
@@ -139,8 +143,51 @@ function renderMarkdownPreview() {
   });
 }
 
+function getBodyMode() {
+  const mode = el.bodyModeToggle?.dataset?.mode;
+  return mode === "text" ? "text" : "preview";
+}
+
+function setBodyMode(mode) {
+  const next = mode === "text" ? "text" : "preview";
+  el.bodyModeToggle.dataset.mode = next;
+  if (next === "preview") {
+    el.bodyModeToggle.innerHTML = [
+      '<svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4 fill-none stroke-current" stroke-width="1.8">',
+      '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"></path>',
+      '<circle cx="12" cy="12" r="2.5"></circle>',
+      "</svg>"
+    ].join("");
+    el.bodyModeToggle.setAttribute("title", "Preview mode");
+    el.bodyModeToggle.setAttribute("aria-label", "Switch to text mode");
+  } else {
+    el.bodyModeToggle.innerHTML = [
+      '<svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4 fill-none stroke-current" stroke-width="1.8">',
+      '<path d="M4 20h4l10-10a2 2 0 0 0-4-4L4 16v4Z"></path>',
+      '<path d="M13.5 6.5l4 4"></path>',
+      "</svg>"
+    ].join("");
+    el.bodyModeToggle.setAttribute("title", "Text mode");
+    el.bodyModeToggle.setAttribute("aria-label", "Switch to preview mode");
+  }
+  el.bodyModeToggle.setAttribute("aria-pressed", String(next === "preview"));
+  el.bodyModeToggle.classList.remove(
+    "border-[#d4d8e0]",
+    "bg-[#fefdfb]",
+    "text-[#4b5568]",
+    "border-[#5f8a5f]",
+    "bg-[#5f8a5f]",
+    "text-[#f3fff3]"
+  );
+  if (next === "preview") {
+    el.bodyModeToggle.classList.add("border-[#5f8a5f]", "bg-[#5f8a5f]", "text-[#f3fff3]");
+  } else {
+    el.bodyModeToggle.classList.add("border-[#d4d8e0]", "bg-[#fefdfb]", "text-[#4b5568]");
+  }
+}
+
 function updateBodyMode() {
-  const preview = el.bodyModeSelect.value === "preview";
+  const preview = getBodyMode() === "preview";
   el.memoBodyInput.classList.toggle("hidden", preview);
   el.memoPreview.classList.toggle("hidden", !preview);
   if (preview) {
@@ -181,6 +228,7 @@ function renderList() {
     const pinBlocked = !isPinned && isDeletable;
     const delBlocked = !isDeletable && isPinned;
     li.className = [
+      "group",
       "relative",
       "cursor-pointer",
       "rounded-lg",
@@ -223,17 +271,32 @@ function renderList() {
       "absolute",
       "right-1",
       "top-1/2",
-      "-translate-y-[12px]",
-      "h-3",
-      "w-3",
-      "rounded",
-      "border",
+      "-translate-y-[14px]",
+      "h-4",
+      "w-4",
+      "flex",
+      "items-center",
+      "justify-center",
       isPinned
-        ? "border-[#6e84ad] bg-[#6e84ad]"
-        : "border-[#cfc6b7] bg-[#f4f1eb] hover:bg-[#e7e1d7]",
+        ? "text-[#2563eb]"
+        : "text-[#94a3b8] hover:text-[#0ea5ff] focus-visible:text-[#0ea5ff]",
+      isPinned
+        ? "opacity-100 pointer-events-auto"
+        : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto",
+      "transition-opacity",
       pinBlocked ? "opacity-40 cursor-not-allowed" : ""
     ].join(" ");
-    pinBtn.textContent = "";
+    const pinIconClass = isPinned
+      ? "h-full w-full stroke-current transition-colors"
+      : "h-full w-full fill-none stroke-current transition-colors";
+    pinBtn.innerHTML = [
+      `<svg viewBox="0 0 24 24" aria-hidden="true" class="${pinIconClass}">`,
+      isPinned
+        ? '<path d="M9 4h6l-1.2 4.2 3.2 3.3V13H7v-1.5l3.2-3.3L9 4Z" fill="currentColor"></path>'
+        : '<path d="M9 4h6l-1.2 4.2 3.2 3.3V13H7v-1.5l3.2-3.3L9 4Z" stroke-width="1.7" stroke-linejoin="round"></path>',
+      '<path d="M12 13v7" stroke-width="1.7" stroke-linecap="round"></path>',
+      "</svg>"
+    ].join("");
     pinBtn.title = pinBlocked ? "Pin is disabled while DEL is on" : (isPinned ? "Unpin" : "Pin");
     pinBtn.setAttribute("aria-label", pinBlocked ? "Pin disabled" : (isPinned ? "Unpin" : "Pin"));
     pinBtn.addEventListener("click", async (ev) => {
@@ -244,7 +307,9 @@ function renderList() {
       }
       await togglePin(item);
     });
-    li.appendChild(pinBtn);
+    if (!isDeletable) {
+      li.appendChild(pinBtn);
+    }
 
     const delBtn = document.createElement("button");
     delBtn.type = "button";
@@ -252,24 +317,29 @@ function renderList() {
       "absolute",
       "right-1",
       "top-1/2",
-      "translate-y-[5px]",
-      "h-3",
-      "w-3",
+      "translate-y-[7px]",
+      "h-4",
+      "w-4",
       "flex",
       "items-center",
       "justify-center",
-      "rounded",
       "leading-none",
-      "border",
       isDeletable
-        ? "border-[#cf7896] bg-[#cf7896] text-[#fff7fb]"
-        : "border-[#cfc6b7] bg-[#f4f1eb] text-[#8e97ab] hover:bg-[#e7e1d7]",
+        ? "text-[#ff2d55]"
+        : "text-[#8e97ab] hover:text-[#ff4d8d] focus-visible:text-[#ff4d8d]",
+      isDeletable
+        ? "opacity-100 pointer-events-auto"
+        : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto",
+      "transition-opacity",
       delBlocked ? "opacity-40 cursor-not-allowed" : ""
     ].join(" ");
+    const delIconClass = "h-full w-full stroke-current transition-colors";
     delBtn.innerHTML = [
-      '<svg viewBox="0 0 12 12" aria-hidden="true" class="h-full w-full stroke-current">',
-      '<line x1="1.5" y1="1.5" x2="10.5" y2="10.5" stroke-width="1.4" stroke-linecap="round"></line>',
-      '<line x1="10.5" y1="1.5" x2="1.5" y2="10.5" stroke-width="1.4" stroke-linecap="round"></line>',
+      `<svg viewBox="0 0 24 24" aria-hidden="true" class="${delIconClass}" stroke-width="1.7">`,
+      '<path d="M5 7h14" stroke-linecap="round"></path>',
+      '<path d="M9 7V5h6v2" stroke-linecap="round" stroke-linejoin="round"></path>',
+      '<rect x="7" y="7" width="10" height="12" rx="1.5" fill="none"></rect>',
+      '<path d="M10 10.5v5.5M14 10.5v5.5" stroke-linecap="round"></path>',
       "</svg>"
     ].join("");
     delBtn.title = delBlocked ? "DEL is disabled while PIN is on" : (isDeletable ? "Unset deletable" : "Set deletable");
@@ -282,7 +352,9 @@ function renderList() {
       }
       await toggleDeletable(item);
     });
-    li.appendChild(delBtn);
+    if (!isPinned) {
+      li.appendChild(delBtn);
+    }
 
     li.addEventListener("click", () => loadMemo(item.id));
     el.memoList.appendChild(li);
@@ -304,6 +376,9 @@ function fillEditor(item, options = {}) {
   el.deleteBtn.title = state.showOnlyDeletable
     ? "ALL: delete all deletable docs (Shift: filter off)"
     : "ALL: delete all deletable docs (Shift: filter on)";
+  if (!el.bodyModeToggle.dataset.mode) {
+    setBodyMode("preview");
+  }
   updateBodyMode();
   renderList();
   setStatus("");
@@ -484,12 +559,15 @@ async function deleteSelectedMemo() {
     setStatus("Delete blocked: unpin first", true);
     return;
   }
+  const confirmMessage = selected.deletable
+    ? `Delete selected memo? (${selected.id})`
+    : `DEL is off. Turn DEL on and delete this selected memo? (${selected.id})`;
+  const ok = window.confirm(confirmMessage);
+  if (!ok) {
+    setStatus("Delete cancelled", true);
+    return;
+  }
   if (!selected.deletable) {
-    const promote = window.confirm("DEL is off. Turn DEL on and delete this selected memo?");
-    if (!promote) {
-      setStatus("Delete cancelled", true);
-      return;
-    }
     try {
       const promoted = await request(`/api/memos/${encodeURIComponent(selected.id)}/deletable`, {
         method: "PATCH",
@@ -501,11 +579,6 @@ async function deleteSelectedMemo() {
       setStatus(`DEL enable error: ${error.message}`, true);
       return;
     }
-  }
-  const ok = window.confirm(`Delete selected memo? (${selected.id})`);
-  if (!ok) {
-    setStatus("Delete cancelled", true);
-    return;
   }
 
   try {
@@ -684,6 +757,7 @@ async function copyBodyText() {
 
 function initEvents() {
   el.newBtn.addEventListener("click", () => {
+    setBodyMode("text");
     fillEditor({
       projectName: el.projectInput.value.trim(),
       memoType: "memo",
@@ -716,9 +790,12 @@ function initEvents() {
   el.qInput.addEventListener("search", onFilterCleared);
   el.projectInput.addEventListener("search", onFilterCleared);
   el.typeSelect.addEventListener("change", loadMemos);
-  el.bodyModeSelect.addEventListener("change", updateBodyMode);
+  el.bodyModeToggle.addEventListener("click", () => {
+    setBodyMode(getBodyMode() === "preview" ? "text" : "preview");
+    updateBodyMode();
+  });
   el.memoBodyInput.addEventListener("input", () => {
-    if (el.bodyModeSelect.value === "preview") {
+    if (getBodyMode() === "preview") {
       renderMarkdownPreview();
     }
   });
@@ -732,5 +809,6 @@ function initEvents() {
 
 initEvents();
 fillEditor(null);
+setBodyMode("preview");
 updateBodyMode();
 loadMemos();

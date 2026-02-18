@@ -128,30 +128,30 @@ Keep going with handover pickup for the current project.
 
 制約:
 - メモ本文に「次回予告」という語を含めない。
-- 本文先頭は "Keep going:" を維持する。
+- 本文先頭は "handover memo" を維持する。
 
 次スレ貼り付け用テンプレ（不要トリガー回避版）:
 
 ```md
-Keep going:
+handover memo
 
 ## The story so far…
-- （ここに事実だけ）
+（2〜3文の短い段落で、起:変化 -> 承:動作 -> 結:落ち着いた締め。ライトノベル風はマイルドに）
 
-## Items Already Addressed
+## Done items
 - （完了事項）
 
-## What we will do next
+## Next actions
 - （次アクション）
 
-## Other agreed items and more..
+## Other agreed and handover items
 - （合意済みルール）
 - （取り決め事項以外のその他引き継ぎ事項があればここ）
 
 メモ:
 - 実行トリガー語は説明時にバッククォートで囲む（例: `メモ保存`）。
 
-先輩へ: （ここに短い締めメッセージ）
+**先輩へ** （ここに短く、少しデレ寄りの締めメッセージ。例: 「一緒に詰められて楽しかったね」）
 ```
 
 ## グローバル導入
