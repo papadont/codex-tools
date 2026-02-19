@@ -212,6 +212,10 @@ function listItemsForView() {
   return state.items.filter((item) => Boolean(item.deletable));
 }
 
+function getVisibleItemsSorted() {
+  return sortMemosForList(listItemsForView());
+}
+
 function syncDeleteButtonLabel() {
   el.deleteBtn.textContent = state.showOnlyDeletable ? "ALL" : "Delete";
 }
@@ -238,7 +242,7 @@ function renderList() {
       "transition-colors",
       "hover:bg-[#e7e1d7]",
       isActive
-        ? "border-[#ddd5c8] bg-[#fcfbf8]"
+        ? "border-[#ddd5c8] bg-[#fefdfb]"
         : isPinned
           ? "border-[#9aabc9] bg-[#f9f6f0]"
           : "border-[#e5ddd2] bg-[#f9f6f0]"
@@ -484,7 +488,7 @@ async function loadMemos(options = {}) {
     const data = await request(`/api/memos?${params.toString()}`);
     state.items = data.items || [];
     const listFromCache = state.lastResponseCacheHit;
-    const visibleItems = sortMemosForList(listItemsForView());
+    const visibleItems = getVisibleItemsSorted();
     if (selectFirst && visibleItems.length > 0) {
       fillEditor(visibleItems[0], { fromCache: listFromCache });
       state.hasInitialAutoSelection = true;
@@ -498,6 +502,14 @@ async function loadMemos(options = {}) {
     }
     if (state.selectedId && !state.items.some((memo) => memo.id === state.selectedId)) {
       state.selectedId = null;
+    }
+    if (state.showOnlyDeletable && state.selectedId && !visibleItems.some((memo) => memo.id === state.selectedId)) {
+      if (visibleItems.length > 0) {
+        fillEditor(visibleItems[0], { fromCache: listFromCache });
+      } else {
+        fillEditor(null);
+      }
+      return;
     }
     renderList();
   } catch (error) {
@@ -628,7 +640,16 @@ async function deleteMemo(ev) {
   if (ev && ev.shiftKey) {
     state.showOnlyDeletable = !state.showOnlyDeletable;
     syncDeleteButtonLabel();
-    renderList();
+    const visibleItems = getVisibleItemsSorted();
+    if (state.showOnlyDeletable && state.selectedId && !visibleItems.some((memo) => memo.id === state.selectedId)) {
+      if (visibleItems.length > 0) {
+        fillEditor(visibleItems[0], { fromCache: false });
+      } else {
+        fillEditor(null);
+      }
+    } else {
+      renderList();
+    }
     setStatus(
       state.showOnlyDeletable ? "Mode: ALL (deletable only)" : "Mode: Delete (all docs)",
       false,
