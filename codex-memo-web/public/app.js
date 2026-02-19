@@ -742,30 +742,50 @@ async function shareMemo() {
     md: "text/markdown;charset=utf-8",
     json: "application/json;charset=utf-8"
   };
-  try {
-    if (navigator.share) {
-      if (typeof File !== "undefined" && navigator.canShare) {
-        const file = new File([body], fileName, { type: typeMap[format] || typeMap.txt });
-        if (navigator.canShare({ files: [file] })) {
-          await navigator.share({
-            title: memo.threadTitle || "codex-memo",
-            files: [file]
-          });
-          setStatus(`Shared ${format.toUpperCase()} file`);
-          return;
-        }
-      }
-      await navigator.share({
-        title: memo.threadTitle || "codex-memo",
-        text: body
-      });
-      setStatus(`Shared as ${format.toUpperCase()} text`);
-      return;
+  const copyAsFallback = async (reasonText) => {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      throw new Error(reasonText ? `${reasonText} and Clipboard API unavailable` : "Clipboard API unavailable");
     }
     await navigator.clipboard.writeText(body);
-    setStatus(`Web Share unavailable. Copied ${format.toUpperCase()} text`);
+    setStatus(`${reasonText ? `${reasonText}. ` : ""}Copied ${format.toUpperCase()} text`);
+  };
+
+  try {
+    if (!navigator.share) {
+      await copyAsFallback("Web Share unavailable");
+      return;
+    }
+
+    if (typeof File !== "undefined" && navigator.canShare) {
+      const file = new File([body], fileName, { type: typeMap[format] || typeMap.txt });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          title: memo.threadTitle || "codex-memo",
+          files: [file]
+        });
+        setStatus(`Shared ${format.toUpperCase()} file`);
+        return;
+      }
+    }
+
+    await navigator.share({
+      title: memo.threadTitle || "codex-memo",
+      text: body
+    });
+    setStatus(`Shared as ${format.toUpperCase()} text`);
   } catch (error) {
-    setStatus(`Share error: ${error.message}`, true);
+    if (error && error.name === "AbortError") {
+      setStatus("Share cancelled");
+      return;
+    }
+    const errorName = (error && error.name) ? String(error.name) : "UnknownError";
+    const errorMessage = (error && error.message) ? String(error.message) : "no message";
+    const reason = `Share failed (${errorName}: ${errorMessage})`;
+    try {
+      await copyAsFallback(reason);
+    } catch (copyError) {
+      setStatus(`Share error: ${reason}. ${copyError.message || copyError}`, true);
+    }
   }
 }
 
