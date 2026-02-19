@@ -15,16 +15,16 @@
         <input id="qInput" type="search" placeholder="Search" class="h-7 w-[210px] rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
         <input id="projectInput" type="search" placeholder="projectName" class="h-7 w-[210px] rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
         <div class="ml-1 flex items-center gap-2">
-          <select id="typeSelect" class="h-7 w-[150px] rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
+          <select id="typeSelect" tabindex="-1" class="h-7 w-[150px] rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
             <option value="">All types</option>
             <option value="memo">memo</option>
             <option value="handover memo">handover memo</option>
             <option value="propomemo">propomemo</option>
             <option value="keep">keep</option>
           </select>
-          <button id="newBtn" type="button" class="ml-6 h-7 rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">New</button>
-          <button id="saveBtn" type="button" class="h-7 rounded-lg border border-[#6e84ad] bg-[#6e84ad] px-2 text-xs text-[#f7f9ff] hover:brightness-95">Save</button>
-          <button id="deleteBtn" type="button" class="h-7 rounded-lg border border-[#cf7896] bg-[#cf7896] px-2 text-xs text-[#fff7fb] hover:brightness-95">Delete</button>
+          <button id="newBtn" tabindex="-1" type="button" class="ml-6 h-7 rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">New</button>
+          <button id="saveBtn" tabindex="-1" type="button" class="h-7 rounded-lg border border-[#6e84ad] bg-[#6e84ad] px-2 text-xs text-[#f7f9ff] hover:brightness-95">Save</button>
+          <button id="deleteBtn" tabindex="-1" type="button" class="h-7 rounded-lg border border-[#cf7896] bg-[#cf7896] px-2 text-xs text-[#fff7fb] hover:brightness-95">Delete</button>
         </div>
       </header>
 
@@ -44,7 +44,7 @@
             </div>
             <div class="w-full md:w-[140px]">
               <label for="memoTypeInput" class="mb-1 block text-[11px] text-[#7a8398]">memoType</label>
-              <select id="memoTypeInput" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
+              <select id="memoTypeInput" tabindex="-1" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
                 <option value="memo">memo</option>
                 <option value="handover memo">handover memo</option>
                 <option value="propomemo">propomemo</option>
@@ -54,13 +54,13 @@
             <div class="w-full md:w-[210px]">
               <label for="downloadFormatSelect" class="mb-1 block text-[11px] text-[#7a8398]">download</label>
               <div class="flex items-center gap-2">
-                <select id="downloadFormatSelect" aria-label="Download format" class="h-7 w-[72px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
+                <select id="downloadFormatSelect" tabindex="-1" aria-label="Download format" class="h-7 w-[72px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
                 <option value="txt">txt</option>
                 <option value="md">md</option>
                 <option value="json">json</option>
                 </select>
-                <button id="downloadBtn" type="button" class="h-7 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">download</button>
-                <button id="shareBtn" type="button" class="h-7 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">share</button>
+                <button id="downloadBtn" tabindex="-1" type="button" class="h-7 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">download</button>
+                <button id="shareBtn" tabindex="-1" type="button" class="h-7 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">share</button>
               </div>
             </div>
           </div>
@@ -70,7 +70,7 @@
             <div class="flex-1">
               <input id="threadTitleInput" type="text" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
             </div>
-            <button id="bodyModeToggle" type="button" aria-label="Toggle body mode" aria-pressed="true" data-mode="preview" class="h-7 w-7 rounded-md border border-[#d4d8e0] bg-[#fefdfb] p-0 text-[10px] font-semibold leading-none text-[#4b5568] outline-none transition-colors hover:border-[#7f90b0] flex items-center justify-center" title="Preview mode">
+            <button id="bodyModeToggle" tabindex="-1" type="button" aria-label="Toggle body mode" aria-pressed="true" data-mode="preview" class="h-7 w-7 rounded-md border border-[#d4d8e0] bg-[#fefdfb] p-0 text-[10px] font-semibold leading-none text-[#4b5568] outline-none transition-colors hover:border-[#7f90b0] flex items-center justify-center" title="Preview mode">
               <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4 fill-none stroke-current" stroke-width="1.8">
                 <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"></path>
                 <circle cx="12" cy="12" r="2.5"></circle>
@@ -80,7 +80,7 @@
 
           <div class="relative mt-0.5 flex min-h-0 flex-1 flex-col">
             <div class="absolute right-1 top-1 z-10 flex items-center gap-2">
-              <button id="copyBodyBtn" type="button" aria-label="Copy body" class="h-7 w-7 rounded-md bg-[#fefdfb] p-1 hover:brightness-95">
+              <button id="copyBodyBtn" tabindex="-1" type="button" aria-label="Copy body" class="h-7 w-7 rounded-md bg-[#fefdfb] p-1 hover:brightness-95">
                 <svg viewBox="0 0 24 24" aria-hidden="true" class="h-full w-full fill-none stroke-[#6e7d99]" stroke-width="1.8">
                   <rect x="9" y="7" width="10" height="10" rx="2"></rect>
                   <rect x="5" y="3" width="10" height="10" rx="2"></rect>

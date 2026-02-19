@@ -271,6 +271,7 @@ function renderList() {
 
     const pinBtn = document.createElement("button");
     pinBtn.type = "button";
+    pinBtn.tabIndex = -1;
     pinBtn.className = [
       "absolute",
       "right-1",
@@ -317,6 +318,7 @@ function renderList() {
 
     const delBtn = document.createElement("button");
     delBtn.type = "button";
+    delBtn.tabIndex = -1;
     delBtn.className = [
       "absolute",
       "right-1",
@@ -780,12 +782,13 @@ function initEvents() {
   el.newBtn.addEventListener("click", () => {
     setBodyMode("text");
     fillEditor({
-      projectName: el.projectInput.value.trim(),
+      projectName: "common",
       memoType: "memo",
       threadTitle: "",
       memoBody: "",
       deletable: false
     });
+    el.threadTitleInput.focus();
     setStatus("New memo mode");
   });
   el.appTitle.addEventListener("dblclick", async () => {
