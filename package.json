@@ -8,7 +8,12 @@
     "memo:save": "node scripts/save_firestore_memo.js",
     "memo:thread": "node scripts/save_thread_memo.js",
     "memo:web": "node scripts/codex_memo_web_server.js",
-    "memo:pick-handover": "node scripts/pick_handover_memo.js"
+    "memo:pick-handover": "node scripts/pick_handover_memo.js",
+    "firestore:usage": "node scripts/firestore_usage_report.js",
+    "usage:weekly": "node scripts/collect_weekly_usage.js",
+    "usage:weekly:install": "scripts/install_weekly_usage_launchagent.sh",
+    "usage:memo-trigger:fire": "node scripts/usage_memo_fire_from_latest.js",
+    "usage:memo-trigger:once:install": "scripts/install_usage_memo_once_launchagent.sh"
   },
   "dependencies": {
     "express": "^4.21.2",
