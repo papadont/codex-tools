@@ -32,6 +32,8 @@ cat >> "${AGENTS_FILE}" <<'EOF'
   - `メモ保存` -> `memo`
   - `引継ぎメモ保存` -> `handover`
   - `提案メモ保存` -> `propomemo`
+- Never save to Firebase without an explicit trigger instruction.
+  - If the user only pastes memo text, ask for confirmation first.
 - Execute:
   - `codex-memo-thread --kind "<memo|handover|propomemo>" --body "<本文>" [--title "<概要>"] [--project "<プロジェクト名>"] [--deletable "true|false"]`
 - Defaults:

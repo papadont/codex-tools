@@ -128,12 +128,12 @@ Keep going with handover pickup for the current project.
 
 制約:
 - メモ本文に「次回予告」という語を含めない。
-- 本文先頭は "handover memo" を維持する。
+- 本文先頭は "Progress log" を維持する。
 
 次スレ貼り付け用テンプレ（不要トリガー回避版）:
 
 ```md
-handover memo
+Progress log
 
 ## The story so far…
 （2〜3文の短い段落で、起:変化 -> 承:動作 -> 結:落ち着いた締め。ライトノベル風はマイルドに）

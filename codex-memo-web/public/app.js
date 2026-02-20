@@ -5,6 +5,7 @@ const state = {
   lastResponseCacheHit: false,
   selectedCacheHit: false,
   showOnlyDeletable: false,
+  usageTileCollapsed: false,
   codexUsageSummary: null,
   codexUsageError: "",
   codexUsageFetchedAtISO: "",
@@ -18,6 +19,12 @@ const CODEX_USAGE_PANEL_ID = "__codex_usage__";
 const USAGE_PANEL_ID = "__firestore_usage__";
 const USAGE_PANEL_HOURS = 24 * 14;
 const USAGE_FETCH_TIMEOUT_MS = 8000;
+const FIREBASE_USAGE_PAGE_URL = "https://console.firebase.google.com/project/hush-pointer/firestore/databases/-default-/usage/prev-24h";
+const CODEX_USAGE_PAGE_URL = "https://chatgpt.com/codex/settings/usage";
+const FIRESTORE_USAGE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const CODEX_USAGE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+
+let usageRefreshInFlight = null;
 
 const el = {
   memoList: document.getElementById("memoList"),
@@ -492,8 +499,90 @@ function getVisibleItemsSorted() {
   return sortMemosForList(listItemsForView());
 }
 
+function parseIsoToMs(value) {
+  if (!value) return NaN;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+function shouldRefreshByAge(fetchedAtISO, intervalMs) {
+  const fetchedAtMs = parseIsoToMs(fetchedAtISO);
+  if (!Number.isFinite(fetchedAtMs)) return true;
+  return (Date.now() - fetchedAtMs) >= Math.max(1, Number(intervalMs || 0));
+}
+
+function shouldRefreshUsage(options = {}) {
+  const forceReload = Boolean(options.forceReload);
+  if (forceReload) {
+    return { refreshFirestore: true, refreshCodex: true };
+  }
+  return {
+    refreshFirestore: shouldRefreshByAge(state.usageFetchedAtISO, FIRESTORE_USAGE_REFRESH_INTERVAL_MS),
+    refreshCodex: shouldRefreshByAge(state.codexUsageFetchedAtISO, CODEX_USAGE_REFRESH_INTERVAL_MS)
+  };
+}
+
+function refreshUsageIfNeeded(options = {}) {
+  if (state.usageTileCollapsed) {
+    return Promise.resolve();
+  }
+  const { refreshFirestore, refreshCodex } = shouldRefreshUsage(options);
+  const forceReload = Boolean(options.forceReload);
+
+  if (!refreshFirestore && !refreshCodex) {
+    return Promise.resolve();
+  }
+  if (!forceReload && usageRefreshInFlight) {
+    return usageRefreshInFlight;
+  }
+
+  const jobs = [];
+  if (refreshFirestore) jobs.push(loadUsageSummary({ forceReload }));
+  if (refreshCodex) jobs.push(loadCodexUsageSummary({ forceReload }));
+
+  usageRefreshInFlight = Promise.all(jobs)
+    .finally(() => {
+      usageRefreshInFlight = null;
+      if (state.selectedId === USAGE_OVERVIEW_PANEL_ID) {
+        fillEditor(buildUsageOverviewPanelItem(), { fromCache: false });
+        return;
+      }
+      if (state.selectedId === USAGE_PANEL_ID) {
+        fillEditor(buildUsagePanelItem(), { fromCache: false });
+        return;
+      }
+      if (state.selectedId === CODEX_USAGE_PANEL_ID) {
+        fillEditor(buildCodexUsagePanelItem(), { fromCache: false });
+        return;
+      }
+      renderList();
+    });
+
+  return usageRefreshInFlight;
+}
+
 function syncDeleteButtonLabel() {
   el.deleteBtn.textContent = state.showOnlyDeletable ? "ALL" : "Delete";
+}
+
+function memoTypeBadgeClass(memoType) {
+  switch (memoType) {
+    case "memo":
+      return "border-[#d2d6de] bg-[#f3f5f8] text-[#5f6674]";
+    case "handover memo":
+      return "border-[#e5c6a0] bg-[#f9efe2] text-[#9a6330]";
+    case "keep":
+      return "border-[#9fcca0] bg-[#e9f5e9] text-[#4e7a4e]";
+    case "propomemo":
+      return "border-[#d8c0a5] bg-[#f6ecdf] text-[#8c6a43]";
+    default:
+      return "border-[#d7dce7] bg-[#f3f5fa] text-[#66738f]";
+  }
+}
+
+function displayMemoTypeLabel(memoType) {
+  if (memoType === "handover memo") return "handover";
+  return memoType || "memo";
 }
 
 async function loadUsageSummary(options = {}) {
@@ -571,18 +660,16 @@ function renderList() {
   const items = sortMemosForList(listItemsForView());
 
   const usageLi = document.createElement("li");
-  const usageActive = isUsageOverviewPanelSelected();
   usageLi.className = [
     "group",
     "relative",
     "cursor-pointer",
-    "rounded-lg",
-    "border",
-    "px-2.5",
-    "py-1.5",
-    "transition-colors",
-    "hover:bg-[#e7e1d7]",
-    usageActive ? "border-[#ddd5c8] bg-[#fefdfb]" : "border-[#e5ddd2] bg-[#f9f6f0]"
+    "-mt-1",
+    "mb-2.5",
+    "px-0.5",
+    "py-0.5",
+    "transition-opacity",
+    "hover:opacity-95"
   ].join(" ");
 
   const fsSnapshot = getFirestoreTodaySnapshot();
@@ -595,6 +682,12 @@ function renderList() {
 
   const left = document.createElement("div");
   left.className = "rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1";
+  left.addEventListener("click", (ev) => {
+    if (!ev.shiftKey) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    window.open(FIREBASE_USAGE_PAGE_URL, "_blank", "noopener,noreferrer");
+  });
   const leftTop = document.createElement("div");
   leftTop.className = "flex items-center justify-between gap-1";
   const leftTitle = document.createElement("strong");
@@ -629,17 +722,24 @@ function renderList() {
     fsMini.appendChild(track);
   }
 
-  const leftMain = document.createElement("div");
-  leftMain.className = "mt-0.5 text-[10px] leading-3.5 text-[#e5e7eb]";
-  leftMain.textContent = state.usageSummary
+  const fsSummaryText = state.usageSummary
     ? `R: ${fsSnapshot.today.read || 0} / W: ${fsSnapshot.today.write || 0} / D: ${fsSnapshot.today.delete || 0}`
     : (state.usageError ? "error" : "loading...");
+  const leftMain = document.createElement("div");
+  leftMain.className = "mt-0.5 text-[10px] leading-3.5 text-[#e5e7eb]";
+  leftMain.textContent = fsSummaryText;
   left.appendChild(leftTop);
   left.appendChild(fsMini);
   left.appendChild(leftMain);
 
   const right = document.createElement("div");
   right.className = "rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1";
+  right.addEventListener("click", (ev) => {
+    if (!ev.shiftKey) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    window.open(CODEX_USAGE_PAGE_URL, "_blank", "noopener,noreferrer");
+  });
   const rightTop = document.createElement("div");
   rightTop.className = "flex items-center justify-between gap-1";
   const rightTitle = document.createElement("strong");
@@ -673,27 +773,65 @@ function renderList() {
     rowBar.appendChild(track);
     codexBars.appendChild(rowBar);
   }
-  const rightMain = document.createElement("div");
-  rightMain.className = "mt-0.5 text-[10px] leading-3.5 text-[#e5e7eb]";
-  rightMain.textContent = state.codexUsageSummary
+  const codexSummaryText = state.codexUsageSummary
     ? `5h: ${formatPercent(codexPrimary?.remainingPercent, 0)} 1w: ${formatPercent(codexSecondary?.remainingPercent, 0)}`
     : (state.codexUsageError ? "error" : "loading...");
+  const rightMain = document.createElement("div");
+  rightMain.className = "mt-0.5 text-[10px] leading-3.5 text-[#e5e7eb]";
+  rightMain.textContent = codexSummaryText;
   right.appendChild(rightTop);
   right.appendChild(codexBars);
   right.appendChild(rightMain);
 
   row.appendChild(left);
   row.appendChild(right);
-  usageLi.appendChild(row);
+  const usageTop = document.createElement("div");
+  usageTop.className = state.usageTileCollapsed
+    ? "mb-1 flex cursor-pointer items-center justify-between rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1"
+    : "mb-1 flex cursor-pointer items-center justify-between px-1";
+  const usageLabel = document.createElement("span");
+  usageLabel.className = state.usageTileCollapsed
+    ? "hidden"
+    : "text-[10px] font-semibold tracking-wide text-[#7c869a]";
+  usageLabel.textContent = state.usageTileCollapsed ? "" : "usage";
+  const collapseIcon = document.createElement("span");
+  collapseIcon.className = state.usageTileCollapsed
+    ? "inline-flex h-4 w-4 items-center justify-center rounded text-[11px] leading-none text-[#e5e7eb]"
+    : "inline-flex h-4 w-4 items-center justify-center rounded text-[11px] leading-none text-[#7c869a]";
+  collapseIcon.textContent = state.usageTileCollapsed ? ">" : "v";
+  usageTop.setAttribute("aria-label", state.usageTileCollapsed ? "Expand usage tile" : "Collapse usage tile");
+  usageTop.title = state.usageTileCollapsed ? "Expand usage tile" : "Collapse usage tile";
+  usageTop.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    state.usageTileCollapsed = !state.usageTileCollapsed;
+    renderList();
+    if (!state.usageTileCollapsed) {
+      refreshUsageIfNeeded().catch(() => {});
+    }
+  });
+  usageTop.appendChild(usageLabel);
+  if (state.usageTileCollapsed) {
+    const collapsedSummary = document.createElement("div");
+    collapsedSummary.className = "mx-2 flex min-w-0 flex-1 items-center gap-5 text-[11px] leading-4 text-[#e5e7eb]";
+    const fsLine = document.createElement("span");
+    fsLine.className = "min-w-0 shrink truncate";
+    fsLine.textContent = fsSummaryText;
+    const codexLine = document.createElement("span");
+    codexLine.className = "min-w-0 shrink truncate";
+    codexLine.textContent = codexSummaryText;
+    collapsedSummary.appendChild(fsLine);
+    collapsedSummary.appendChild(codexLine);
+    usageTop.appendChild(collapsedSummary);
+  }
+  usageTop.appendChild(collapseIcon);
+  usageLi.appendChild(usageTop);
+  if (!state.usageTileCollapsed) {
+    usageLi.appendChild(row);
+  }
   usageLi.title = `Firebase: ${formatDate(state.usageFetchedAtISO || state.usageSummary?.endTime)} | Codex: ${formatDate(state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO)}`;
   usageLi.addEventListener("click", () => fillEditor(buildUsageOverviewPanelItem(), { fromCache: false }));
   el.memoList.appendChild(usageLi);
-
-  const usageDivider = document.createElement("li");
-  usageDivider.className = "pointer-events-none my-1.5 h-[4px]";
-  usageDivider.setAttribute("aria-hidden", "true");
-  usageDivider.innerHTML = '<div class="h-px bg-[#f6f8fc]"></div><div class="h-px bg-[#b5c0d4]"></div><div class="h-px bg-[#d5dce9]"></div>';
-  el.memoList.appendChild(usageDivider);
 
   for (const item of items) {
     const li = document.createElement("li");
@@ -723,19 +861,33 @@ function renderList() {
     topRow.className = "flex items-center gap-1";
 
     const title = document.createElement("strong");
-    title.className = [
-      "block",
-      "text-[13px]",
-      "leading-4",
-      item.memoType === "keep" ? "text-[#5f8a5f]" : "text-[#4f5f7e]"
-    ].join(" ");
+    title.className = "block text-[13px] leading-4 text-[#4f5f7e]";
     title.textContent = item.threadTitle || "(no title)";
 
     topRow.appendChild(title);
 
-    const meta = document.createElement("small");
-    meta.className = "mt-0.5 block truncate whitespace-nowrap pr-8 text-[9px] leading-3.5 text-[#78829a]";
-    meta.textContent = `${item.memoType} | ${item.projectName} | ${formatDate(item.datetimeISO || item.createdAtISO)}`;
+    const meta = document.createElement("div");
+    meta.className = "mt-0.5 flex min-w-0 items-center gap-1 pr-8";
+    const typeBadge = document.createElement("span");
+    typeBadge.className = [
+      "inline-flex",
+      "h-3.5",
+      "shrink-0",
+      "items-center",
+      "rounded-md",
+      "border",
+      "px-1",
+      "text-[9px]",
+      "font-semibold",
+      "leading-none",
+      memoTypeBadgeClass(item.memoType)
+    ].join(" ");
+    typeBadge.textContent = displayMemoTypeLabel(item.memoType);
+    const metaText = document.createElement("small");
+    metaText.className = "block min-w-0 truncate whitespace-nowrap text-[9px] leading-3.5 text-[#78829a]";
+    metaText.textContent = `${item.projectName} | ${formatDate(item.datetimeISO || item.createdAtISO)}`;
+    meta.appendChild(typeBadge);
+    meta.appendChild(metaText);
 
     li.appendChild(topRow);
     li.appendChild(meta);
@@ -967,24 +1119,7 @@ async function toggleDeletable(item) {
 
 async function loadMemos(options = {}) {
   const forceReload = Boolean(options.forceReload);
-  const usageJob = Promise.all([
-    loadUsageSummary({ forceReload }),
-    loadCodexUsageSummary({ forceReload })
-  ]).finally(() => {
-    if (state.selectedId === USAGE_OVERVIEW_PANEL_ID) {
-      fillEditor(buildUsageOverviewPanelItem(), { fromCache: false });
-      return;
-    }
-    if (state.selectedId === USAGE_PANEL_ID) {
-      fillEditor(buildUsagePanelItem(), { fromCache: false });
-      return;
-    }
-    if (state.selectedId === CODEX_USAGE_PANEL_ID) {
-      fillEditor(buildCodexUsagePanelItem(), { fromCache: false });
-      return;
-    }
-    renderList();
-  });
+  const usageJob = refreshUsageIfNeeded({ forceReload });
 
   try {
     const selectFirst = Boolean(options.selectFirst);
@@ -1004,9 +1139,8 @@ async function loadMemos(options = {}) {
       state.hasInitialAutoSelection = true;
       return usageJob;
     }
-    if (!state.selectedId && !state.hasInitialAutoSelection && visibleItems.length > 0) {
-      const sorted = visibleItems;
-      fillEditor(sorted[0], { fromCache: listFromCache });
+    if (!state.selectedId && !state.hasInitialAutoSelection) {
+      fillEditor(buildUsageOverviewPanelItem(), { fromCache: false });
       state.hasInitialAutoSelection = true;
       return usageJob;
     }

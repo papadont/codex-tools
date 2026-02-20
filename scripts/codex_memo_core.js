@@ -3,6 +3,7 @@
 const admin = require("firebase-admin");
 
 const ALLOWED_MEMO_TYPES = new Set(["handover memo", "memo", "propomemo", "keep"]);
+const DEFAULT_SAVE_TIMEOUT_MS = Number(process.env.CODEX_MEMO_SAVE_TIMEOUT_MS || 15000);
 
 function parseArgs(argv) {
   const parsed = {};
@@ -70,7 +71,16 @@ async function saveMemoRecord(input) {
   };
 
   const db = admin.firestore();
-  const ref = await db.collection("codex-memo").add(payload);
+  const savePromise = db.collection("codex-memo").add(payload);
+  const timeoutMs = Number.isFinite(DEFAULT_SAVE_TIMEOUT_MS) && DEFAULT_SAVE_TIMEOUT_MS > 0
+    ? DEFAULT_SAVE_TIMEOUT_MS
+    : 15000;
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => {
+      reject(new Error(`Save timed out after ${timeoutMs}ms. Check network/IAM and retry.`));
+    }, timeoutMs);
+  });
+  const ref = await Promise.race([savePromise, timeoutPromise]);
   return { docId: ref.id, payload };
 }
 

@@ -21,14 +21,49 @@ Usage:
     [--deletable "false"]
 
 Defaults:
-  --title: bodyの先頭40文字
+  --title: 本文から自動要約（未指定時）
   --project: 現在ディレクトリ名
 `);
 }
 
+function normalizeTitleText(input) {
+  return String(input || "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_`~>#-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function trimTitle(input) {
-  const compact = input.replace(/\s+/g, " ").trim();
+  const compact = normalizeTitleText(input);
   return compact.slice(0, 40);
+}
+
+function isBoilerplateLine(line) {
+  if (!line) return true;
+  const lowered = line.toLowerCase();
+  return (
+    lowered === "progress log" ||
+    lowered === "the story so far…" ||
+    lowered === "the story so far..." ||
+    lowered === "done items" ||
+    lowered === "next actions" ||
+    lowered === "other agreed and handover items" ||
+    lowered === "先輩へ"
+  );
+}
+
+function pickAutoTitleFromBody(body) {
+  const lines = String(body || "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^#{1,6}\s*/, "").trim());
+
+  for (const raw of lines) {
+    const cleaned = normalizeTitleText(raw);
+    if (!cleaned || isBoilerplateLine(cleaned)) continue;
+    return trimTitle(cleaned);
+  }
+  return trimTitle(body);
 }
 
 async function main() {
@@ -51,7 +86,7 @@ async function main() {
   }
 
   const projectName = args.project || process.env.CODEX_PROJECT_NAME || path.basename(process.cwd());
-  const threadTitle = args.title && String(args.title).trim() ? args.title.trim() : trimTitle(args.body);
+  const threadTitle = args.title && String(args.title).trim() ? args.title.trim() : pickAutoTitleFromBody(args.body);
   const memoType = TYPE_MAP[args.kind];
 
   const result = await saveMemoRecord({
