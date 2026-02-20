@@ -4,8 +4,20 @@ const state = {
   hasInitialAutoSelection: false,
   lastResponseCacheHit: false,
   selectedCacheHit: false,
-  showOnlyDeletable: false
+  showOnlyDeletable: false,
+  codexUsageSummary: null,
+  codexUsageError: "",
+  codexUsageFetchedAtISO: "",
+  usageSummary: null,
+  usageError: "",
+  usageFetchedAtISO: ""
 };
+
+const USAGE_OVERVIEW_PANEL_ID = "__usage_overview__";
+const CODEX_USAGE_PANEL_ID = "__codex_usage__";
+const USAGE_PANEL_ID = "__firestore_usage__";
+const USAGE_PANEL_HOURS = 24 * 14;
+const USAGE_FETCH_TIMEOUT_MS = 8000;
 
 const el = {
   memoList: document.getElementById("memoList"),
@@ -72,6 +84,270 @@ function formatDate(value) {
   const mi = pad2(date.getMinutes());
   const ss = pad2(date.getSeconds());
   return `${yyyy}/${mm}/${dd} ${hh}:${mi}:${ss}`;
+}
+
+function isUsagePanelSelected() {
+  return state.selectedId === USAGE_PANEL_ID;
+}
+
+function isCodexUsagePanelSelected() {
+  return state.selectedId === CODEX_USAGE_PANEL_ID;
+}
+
+function isUsageOverviewPanelSelected() {
+  return state.selectedId === USAGE_OVERVIEW_PANEL_ID;
+}
+
+function isReadOnlyPanelSelected() {
+  return isUsageOverviewPanelSelected() || isUsagePanelSelected() || isCodexUsagePanelSelected();
+}
+
+function isSpecialPanelId(id) {
+  return id === USAGE_OVERVIEW_PANEL_ID || id === USAGE_PANEL_ID || id === CODEX_USAGE_PANEL_ID;
+}
+
+function formatPercent(value, digits = 3) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? `${n.toFixed(digits)}%` : "-";
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Number(seconds || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  if (h <= 0) return `${m}m`;
+  return `${h}h ${m}m`;
+}
+
+function resetDateText(window) {
+  return formatDate(window?.resetAtISO);
+}
+
+function getUsageOverviewFetchedAtISO() {
+  const fsISO = state.usageFetchedAtISO || state.usageSummary?.endTime || "";
+  const codexISO = state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO || "";
+  const fsMs = fsISO ? new Date(fsISO).getTime() : NaN;
+  const codexMs = codexISO ? new Date(codexISO).getTime() : NaN;
+  if (Number.isFinite(fsMs) && Number.isFinite(codexMs)) {
+    return fsMs <= codexMs ? fsISO : codexISO;
+  }
+  if (Number.isFinite(fsMs)) return fsISO;
+  if (Number.isFinite(codexMs)) return codexISO;
+  return "";
+}
+
+function boldPercent(value, digits = 1) {
+  return `**${formatPercent(value, digits)}**`;
+}
+
+function applyPressureBadgeBorder(elm, usedPercent) {
+  const v = Math.max(0, Math.min(100, Number(usedPercent || 0)));
+  elm.classList.remove("border-[#7fb08a]", "border-[#d6a56a]", "border-[#d28b99]", "bg-[#fdecef]");
+  if (v < 50) {
+    elm.classList.add("border-[#7fb08a]");
+  } else if (v < 80) {
+    elm.classList.add("border-[#d6a56a]");
+  } else {
+    elm.classList.add("border-[#d28b99]", "bg-[#fdecef]");
+  }
+}
+
+function getFirestoreTodaySnapshot() {
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const perDay = Array.isArray(state.usageSummary?.perDay) ? state.usageSummary.perDay : [];
+  const today = perDay.find((d) => d.date === todayKey) || perDay[perDay.length - 1] || { read: 0, write: 0, delete: 0, date: todayKey };
+  const recent = perDay.slice(-14);
+  const limits = state.usageSummary?.limitsDaily || { read: 50000, write: 20000, delete: 20000 };
+  const ratePercent = {
+    read: Number(today?.ratePercent?.read ?? ((Number(today.read || 0) / Math.max(1, Number(limits.read || 1))) * 100)),
+    write: Number(today?.ratePercent?.write ?? ((Number(today.write || 0) / Math.max(1, Number(limits.write || 1))) * 100)),
+    delete: Number(today?.ratePercent?.delete ?? ((Number(today.delete || 0) / Math.max(1, Number(limits.delete || 1))) * 100))
+  };
+  const maxInRecent = {
+    read: Math.max(1, ...recent.map((d) => Number(d.read || 0))),
+    write: Math.max(1, ...recent.map((d) => Number(d.write || 0))),
+    delete: Math.max(1, ...recent.map((d) => Number(d.delete || 0)))
+  };
+  const relativePercent = {
+    read: (Number(today.read || 0) / Math.max(1, Number(maxInRecent.read || 1))) * 100,
+    write: (Number(today.write || 0) / Math.max(1, Number(maxInRecent.write || 1))) * 100,
+    delete: (Number(today.delete || 0) / Math.max(1, Number(maxInRecent.delete || 1))) * 100
+  };
+  return { today, ratePercent, relativePercent };
+}
+
+function buildUsageOverviewBody() {
+  const fs = getFirestoreTodaySnapshot();
+  const codexPrimary = state.codexUsageSummary?.primaryWindow || null;
+  const codexSecondary = state.codexUsageSummary?.secondaryWindow || null;
+  const fetchedAtISO = getUsageOverviewFetchedAtISO();
+  const fsPerDay = Array.isArray(state.usageSummary?.perDay) ? state.usageSummary.perDay : [];
+  const fs14Desc = [...fsPerDay]
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
+    .slice(0, 14);
+
+  const lines = [
+    `- fetched: ${formatDate(fetchedAtISO)}`,
+    "",
+    "## Codex",
+    "",
+    state.codexUsageSummary
+      ? `- 5h remaining: ${boldPercent(codexPrimary?.remainingPercent, 0)} reset: ${resetDateText(codexPrimary)}`
+      : `- status: ${state.codexUsageError ? `error (${state.codexUsageError})` : "loading"}`,
+    state.codexUsageSummary
+      ? `- weekly remaining: ${boldPercent(codexSecondary?.remainingPercent, 0)} reset: ${resetDateText(codexSecondary)}`
+      : "- weekly remaining: -",
+    "",
+    "## Firestore",
+    "",
+    state.usageSummary
+      ? `- free-tier: R ${boldPercent(fs.ratePercent.read, 1)} / W ${boldPercent(fs.ratePercent.write, 1)} / D ${boldPercent(fs.ratePercent.delete, 1)}`
+      : `- status: ${state.usageError ? `error (${state.usageError})` : "loading"}`,
+    state.usageSummary
+      ? `- vs 14d max: R ${boldPercent(fs.relativePercent.read, 0)} / W ${boldPercent(fs.relativePercent.write, 0)} / D ${boldPercent(fs.relativePercent.delete, 0)}`
+      : "- vs 14d max: -",
+    "",
+    "### Firestore 14d details",
+    "",
+    "| date (UTC) | read | write | delete | total |",
+    "| --- | ---: | ---: | ---: | ---: |"
+  ];
+
+  for (const day of fs14Desc) {
+    lines.push(`| ${day.date || "-"} | ${day.read || 0} | ${day.write || 0} | ${day.delete || 0} | ${day.total || 0} |`);
+  }
+
+  return lines.join("\n");
+}
+
+function buildUsageOverviewPanelItem() {
+  return {
+    id: USAGE_OVERVIEW_PANEL_ID,
+    projectName: "system",
+    memoType: "keep",
+    threadTitle: "Usage overview",
+    memoBody: buildUsageOverviewBody(),
+    createdAtISO: state.codexUsageSummary?.fetchedAtISO || state.usageSummary?.endTime || "",
+    updatedAtISO: state.codexUsageSummary?.fetchedAtISO || state.usageSummary?.endTime || ""
+  };
+}
+
+function buildUsageBody(summary) {
+  if (!summary) {
+    return [
+      "# Firestore usage",
+      "",
+      "usage data is not loaded yet."
+    ].join("\n");
+  }
+
+  const perDayRaw = Array.isArray(summary.perDay) ? summary.perDay : [];
+  const perDayDesc = [...perDayRaw].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  const today = perDayDesc[0] || { date: "-", read: 0, write: 0, delete: 0, ratePercent: {} };
+  const todayRate = {
+    read: Number(today?.ratePercent?.read || 0),
+    write: Number(today?.ratePercent?.write || 0),
+    delete: Number(today?.ratePercent?.delete || 0)
+  };
+  const todayPeak = Math.max(todayRate.read, todayRate.write, todayRate.delete);
+
+  const lines = [
+    `# Firestore usage (${summary.projectId || "-"})`,
+    "",
+    `window: ${summary.startTime || "-"} .. ${summary.endTime || "-"} (${summary.windowHours || "-"}h)`,
+    "",
+    "## Totals",
+    "",
+    `- read: ${summary.totals?.read || 0} / ${summary.limitsDaily?.read || 0} (${boldPercent(summary.ratePercentOfDailyFreeTier?.read, 3)})`,
+    `- write: ${summary.totals?.write || 0} / ${summary.limitsDaily?.write || 0} (${boldPercent(summary.ratePercentOfDailyFreeTier?.write, 3)})`,
+    `- delete: ${summary.totals?.delete || 0} / ${summary.limitsDaily?.delete || 0} (${boldPercent(summary.ratePercentOfDailyFreeTier?.delete, 3)})`,
+    "",
+    "## Free-tier (today)",
+    "",
+    `- peak usage rate: ${boldPercent(todayPeak, 1)} (max of R/W/D)`,
+    `- read: ${today.read || 0} / ${summary.limitsDaily?.read || 0} (${boldPercent(todayRate.read, 2)})`,
+    `- write: ${today.write || 0} / ${summary.limitsDaily?.write || 0} (${boldPercent(todayRate.write, 2)})`,
+    `- delete: ${today.delete || 0} / ${summary.limitsDaily?.delete || 0} (${boldPercent(todayRate.delete, 2)})`,
+    "",
+    "## Daily histogram source",
+    "",
+    "| date (UTC) | read | write | delete | total |",
+    "| --- | ---: | ---: | ---: | ---: |"
+  ];
+
+  for (const day of perDayDesc) {
+    lines.push(`| ${day.date} | ${day.read || 0} | ${day.write || 0} | ${day.delete || 0} | ${day.total || 0} |`);
+  }
+
+  if (summary.note) {
+    lines.push("", summary.note);
+  }
+
+  return lines.join("\n");
+}
+
+function buildUsagePanelItem() {
+  return {
+    id: USAGE_PANEL_ID,
+    projectName: "system",
+    memoType: "keep",
+    threadTitle: "Firestore usage",
+    memoBody: buildUsageBody(state.usageSummary),
+    createdAtISO: state.usageSummary?.endTime || "",
+    updatedAtISO: state.usageSummary?.endTime || ""
+  };
+}
+
+function buildCodexUsageBody(summary) {
+  if (!summary) {
+    return [
+      "# Codex usage",
+      "",
+      "usage data is not loaded yet."
+    ].join("\n");
+  }
+
+  const primary = summary.primaryWindow || null;
+  const secondary = summary.secondaryWindow || null;
+  const codeReview = summary.codeReviewWindow || null;
+
+  return [
+    `# Codex usage (${summary.planType || "-"})`,
+    "",
+    `fetched: ${summary.fetchedAtISO || "-"}`,
+    `allowed: ${summary.allowed ? "yes" : "no"} / limit reached: ${summary.limitReached ? "yes" : "no"}`,
+    "",
+    "## Window (chat)",
+    "",
+    `- 5h window used: ${boldPercent(primary?.usedPercent, 1)} / remaining: ${boldPercent(primary?.remainingPercent, 1)}`,
+    `- 5h reset: ${resetDateText(primary)}`,
+    `- weekly window used: ${boldPercent(secondary?.usedPercent, 1)} / remaining: ${boldPercent(secondary?.remainingPercent, 1)}`,
+    `- weekly reset: ${resetDateText(secondary)}`,
+    "",
+    "## Window (code review)",
+    "",
+    `- weekly window used: ${boldPercent(codeReview?.usedPercent, 1)} / remaining: ${boldPercent(codeReview?.remainingPercent, 1)}`,
+    `- reset: ${resetDateText(codeReview)}`,
+    "",
+    "## Credits",
+    "",
+    `- has credits: ${summary.credits?.hasCredits ? "yes" : "no"} / unlimited: ${summary.credits?.unlimited ? "yes" : "no"}`,
+    `- balance: ${summary.credits?.balance || "0"}`,
+    `- approx local messages: ${(summary.credits?.approxLocalMessages || [0, 0]).join(" .. ")}`,
+    `- approx cloud messages: ${(summary.credits?.approxCloudMessages || [0, 0]).join(" .. ")}`
+  ].join("\n");
+}
+
+function buildCodexUsagePanelItem() {
+  return {
+    id: CODEX_USAGE_PANEL_ID,
+    projectName: "system",
+    memoType: "keep",
+    threadTitle: "Codex usage",
+    memoBody: buildCodexUsageBody(state.codexUsageSummary),
+    createdAtISO: state.codexUsageSummary?.fetchedAtISO || "",
+    updatedAtISO: state.codexUsageSummary?.fetchedAtISO || ""
+  };
 }
 
 function renderDateWithCacheIndicator(value) {
@@ -220,9 +496,204 @@ function syncDeleteButtonLabel() {
   el.deleteBtn.textContent = state.showOnlyDeletable ? "ALL" : "Delete";
 }
 
+async function loadUsageSummary(options = {}) {
+  const forceReload = Boolean(options.forceReload);
+  const params = new URLSearchParams({
+    hours: String(USAGE_PANEL_HOURS)
+  });
+  if (forceReload) {
+    params.set("nocache", "1");
+  }
+
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const fetchPromise = fetch(
+    `/api/usage/firestore?${params.toString()}`,
+    controller ? { signal: controller.signal } : undefined
+  );
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => {
+      if (controller) controller.abort();
+      reject(new Error(`Timed out (${USAGE_FETCH_TIMEOUT_MS}ms)`));
+    }, USAGE_FETCH_TIMEOUT_MS);
+  });
+
+  try {
+    const res = await Promise.race([fetchPromise, timeoutPromise]);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body.error || `HTTP ${res.status}`);
+    }
+    state.usageSummary = body;
+    state.usageError = "";
+    state.usageFetchedAtISO = new Date().toISOString();
+  } catch (error) {
+    state.usageSummary = null;
+    state.usageError = error.message || "Failed to load usage";
+    state.usageFetchedAtISO = "";
+  }
+}
+
+async function loadCodexUsageSummary(options = {}) {
+  const forceReload = Boolean(options.forceReload);
+  const params = new URLSearchParams();
+  if (forceReload) params.set("nocache", "1");
+
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const fetchPromise = fetch(
+    `/api/usage/codex?${params.toString()}`,
+    controller ? { signal: controller.signal } : undefined
+  );
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => {
+      if (controller) controller.abort();
+      reject(new Error(`Timed out (${USAGE_FETCH_TIMEOUT_MS}ms)`));
+    }, USAGE_FETCH_TIMEOUT_MS);
+  });
+
+  try {
+    const res = await Promise.race([fetchPromise, timeoutPromise]);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body.error || `HTTP ${res.status}`);
+    }
+    state.codexUsageSummary = body;
+    state.codexUsageError = "";
+    state.codexUsageFetchedAtISO = new Date().toISOString();
+  } catch (error) {
+    state.codexUsageSummary = null;
+    state.codexUsageError = error.message || "Failed to load codex usage";
+    state.codexUsageFetchedAtISO = "";
+  }
+}
+
 function renderList() {
   el.memoList.innerHTML = "";
   const items = sortMemosForList(listItemsForView());
+
+  const usageLi = document.createElement("li");
+  const usageActive = isUsageOverviewPanelSelected();
+  usageLi.className = [
+    "group",
+    "relative",
+    "cursor-pointer",
+    "rounded-lg",
+    "border",
+    "px-2.5",
+    "py-1.5",
+    "transition-colors",
+    "hover:bg-[#e7e1d7]",
+    usageActive ? "border-[#ddd5c8] bg-[#fefdfb]" : "border-[#e5ddd2] bg-[#f9f6f0]"
+  ].join(" ");
+
+  const fsSnapshot = getFirestoreTodaySnapshot();
+  const fsPeak = Math.max(fsSnapshot.ratePercent.read, fsSnapshot.ratePercent.write, fsSnapshot.ratePercent.delete);
+  const codexPrimary = state.codexUsageSummary?.primaryWindow || null;
+  const codexSecondary = state.codexUsageSummary?.secondaryWindow || null;
+
+  const row = document.createElement("div");
+  row.className = "grid grid-cols-2 gap-1.5";
+
+  const left = document.createElement("div");
+  left.className = "rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1";
+  const leftTop = document.createElement("div");
+  leftTop.className = "flex items-center justify-between gap-1";
+  const leftTitle = document.createElement("strong");
+  leftTitle.className = "block text-[12px] leading-4 text-[#f9fafb]";
+  leftTitle.textContent = "Firebase";
+  const fsBadge = document.createElement("span");
+  fsBadge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none";
+  fsBadge.classList.add("border", "bg-[#ffffff]", "text-[#374151]");
+  applyPressureBadgeBorder(fsBadge, fsPeak);
+  fsBadge.textContent = state.usageSummary ? `${fsPeak.toFixed(1)}%` : "-";
+  leftTop.appendChild(leftTitle);
+  leftTop.appendChild(fsBadge);
+
+  const fsMini = document.createElement("div");
+  fsMini.className = "mt-0.5 flex h-6 items-end gap-1";
+  const fsBarDefs = [
+    { key: "read", color: "bg-[#6f86ac]", bg: "bg-[#d7deeb]" },
+    { key: "write", color: "bg-[#d59d4f]", bg: "bg-[#eee1c8]" },
+    { key: "delete", color: "bg-[#cf7896]", bg: "bg-[#edd4df]" }
+  ];
+  for (const def of fsBarDefs) {
+    const track = document.createElement("span");
+    track.className = `relative h-full w-[8px] overflow-hidden rounded-[3px] ${def.bg}`;
+    const fill = document.createElement("span");
+    fill.className = `absolute bottom-0 left-0 right-0 ${def.color}`;
+    const h = state.usageSummary ? Math.max(2, Math.min(100, Number(fsSnapshot.relativePercent[def.key] || 0))) : 2;
+    fill.style.height = `${h}%`;
+    track.title = state.usageSummary
+      ? `${def.key}: ${fsSnapshot.today[def.key] || 0} / free-tier ${formatPercent(fsSnapshot.ratePercent[def.key], 2)} / 14d比 ${formatPercent(fsSnapshot.relativePercent[def.key], 1)}`
+      : "loading";
+    track.appendChild(fill);
+    fsMini.appendChild(track);
+  }
+
+  const leftMain = document.createElement("div");
+  leftMain.className = "mt-0.5 text-[10px] leading-3.5 text-[#e5e7eb]";
+  leftMain.textContent = state.usageSummary
+    ? `R: ${fsSnapshot.today.read || 0} / W: ${fsSnapshot.today.write || 0} / D: ${fsSnapshot.today.delete || 0}`
+    : (state.usageError ? "error" : "loading...");
+  left.appendChild(leftTop);
+  left.appendChild(fsMini);
+  left.appendChild(leftMain);
+
+  const right = document.createElement("div");
+  right.className = "rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1";
+  const rightTop = document.createElement("div");
+  rightTop.className = "flex items-center justify-between gap-1";
+  const rightTitle = document.createElement("strong");
+  rightTitle.className = "block text-[12px] leading-4 text-[#f9fafb]";
+  rightTitle.textContent = "Codex";
+  const codexBadge = document.createElement("span");
+  codexBadge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
+  applyPressureBadgeBorder(codexBadge, 100 - Number(codexSecondary?.remainingPercent || 0));
+  codexBadge.textContent = state.codexUsageSummary ? `${formatPercent(codexSecondary?.remainingPercent, 0)}` : "-";
+  rightTop.appendChild(rightTitle);
+  rightTop.appendChild(codexBadge);
+  const codexBars = document.createElement("div");
+  codexBars.className = "mt-0.5 space-y-0.5";
+  const codexDefs = [
+    { label: "5h", value: Number(codexPrimary?.remainingPercent || 0), color: "bg-[#b88f55]", bg: "bg-[#efdfc7]" },
+    { label: "1w", value: Number(codexSecondary?.remainingPercent || 0), color: "bg-[#7a9f7a]", bg: "bg-[#ddebd9]" }
+  ];
+  for (const def of codexDefs) {
+    const rowBar = document.createElement("div");
+    rowBar.className = "flex items-center gap-1";
+    const label = document.createElement("span");
+    label.className = "w-5 text-[10px] leading-3 text-[#e5e7eb]";
+    label.textContent = def.label;
+    const track = document.createElement("span");
+    track.className = `relative block h-[7px] flex-1 overflow-hidden rounded ${def.bg}`;
+    const fill = document.createElement("span");
+    fill.className = `absolute bottom-0 left-0 top-0 ${def.color}`;
+    fill.style.width = `${state.codexUsageSummary ? Math.max(2, Math.min(100, def.value)) : 2}%`;
+    track.appendChild(fill);
+    rowBar.appendChild(label);
+    rowBar.appendChild(track);
+    codexBars.appendChild(rowBar);
+  }
+  const rightMain = document.createElement("div");
+  rightMain.className = "mt-0.5 text-[10px] leading-3.5 text-[#e5e7eb]";
+  rightMain.textContent = state.codexUsageSummary
+    ? `5h: ${formatPercent(codexPrimary?.remainingPercent, 0)} 1w: ${formatPercent(codexSecondary?.remainingPercent, 0)}`
+    : (state.codexUsageError ? "error" : "loading...");
+  right.appendChild(rightTop);
+  right.appendChild(codexBars);
+  right.appendChild(rightMain);
+
+  row.appendChild(left);
+  row.appendChild(right);
+  usageLi.appendChild(row);
+  usageLi.title = `Firebase: ${formatDate(state.usageFetchedAtISO || state.usageSummary?.endTime)} | Codex: ${formatDate(state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO)}`;
+  usageLi.addEventListener("click", () => fillEditor(buildUsageOverviewPanelItem(), { fromCache: false }));
+  el.memoList.appendChild(usageLi);
+
+  const usageDivider = document.createElement("li");
+  usageDivider.className = "pointer-events-none my-1.5 h-[4px]";
+  usageDivider.setAttribute("aria-hidden", "true");
+  usageDivider.innerHTML = '<div class="h-px bg-[#f6f8fc]"></div><div class="h-px bg-[#b5c0d4]"></div><div class="h-px bg-[#d5dce9]"></div>';
+  el.memoList.appendChild(usageDivider);
 
   for (const item of items) {
     const li = document.createElement("li");
@@ -368,26 +839,44 @@ function renderList() {
 }
 
 function fillEditor(item, options = {}) {
+  const isOverviewPanel = item && item.id === USAGE_OVERVIEW_PANEL_ID;
+  const isUsagePanel = item && item.id === USAGE_PANEL_ID;
+  const isCodexPanel = item && item.id === CODEX_USAGE_PANEL_ID;
+  const isReadOnlyPanel = Boolean(isOverviewPanel || isUsagePanel || isCodexPanel);
   state.selectedId = item && item.id ? item.id : null;
   state.selectedCacheHit = Boolean(options.fromCache);
   el.projectNameInput.value = item?.projectName || "";
   el.memoTypeInput.value = item?.memoType || "memo";
   el.threadTitleInput.value = item?.threadTitle || "";
   el.memoBodyInput.value = item?.memoBody || "";
-  el.dateText.textContent = renderDateWithCacheIndicator(
-    item?.updatedAtISO || item?.createdAtISO || item?.datetimeISO
-  );
-  el.deleteBtn.disabled = false;
+  el.dateText.textContent = isUsagePanel
+    ? formatDate(state.usageFetchedAtISO || state.usageSummary?.endTime)
+    : isOverviewPanel
+      ? formatDate(state.codexUsageFetchedAtISO || state.usageFetchedAtISO || item?.updatedAtISO)
+    : isCodexPanel
+      ? formatDate(state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO)
+      : renderDateWithCacheIndicator(item?.updatedAtISO || item?.createdAtISO || item?.datetimeISO);
+  el.projectNameInput.readOnly = isReadOnlyPanel;
+  el.threadTitleInput.readOnly = isReadOnlyPanel;
+  el.memoBodyInput.readOnly = isReadOnlyPanel;
+  el.memoTypeInput.disabled = isReadOnlyPanel;
+  el.saveBtn.disabled = isReadOnlyPanel;
+  el.deleteBtn.disabled = isReadOnlyPanel;
+  el.downloadFormatSelect.disabled = isReadOnlyPanel;
+  el.downloadBtn.disabled = isReadOnlyPanel;
+  el.shareBtn.disabled = isReadOnlyPanel;
   syncDeleteButtonLabel();
-  el.deleteBtn.title = state.showOnlyDeletable
-    ? "ALL: delete all deletable docs (Shift: filter off)"
-    : "ALL: delete all deletable docs (Shift: filter on)";
+  el.deleteBtn.title = isReadOnlyPanel
+    ? "Delete is disabled in usage panel"
+    : state.showOnlyDeletable
+      ? "ALL: delete all deletable docs (Shift: filter off)"
+      : "ALL: delete all deletable docs (Shift: filter on)";
   if (!el.bodyModeToggle.dataset.mode) {
     setBodyMode("preview");
   }
   updateBodyMode();
   renderList();
-  setStatus("");
+  setStatus(isReadOnlyPanel ? "Usage detail view" : "");
 }
 
 function applyUpdatedMemo(updated) {
@@ -477,8 +966,27 @@ async function toggleDeletable(item) {
 }
 
 async function loadMemos(options = {}) {
+  const forceReload = Boolean(options.forceReload);
+  const usageJob = Promise.all([
+    loadUsageSummary({ forceReload }),
+    loadCodexUsageSummary({ forceReload })
+  ]).finally(() => {
+    if (state.selectedId === USAGE_OVERVIEW_PANEL_ID) {
+      fillEditor(buildUsageOverviewPanelItem(), { fromCache: false });
+      return;
+    }
+    if (state.selectedId === USAGE_PANEL_ID) {
+      fillEditor(buildUsagePanelItem(), { fromCache: false });
+      return;
+    }
+    if (state.selectedId === CODEX_USAGE_PANEL_ID) {
+      fillEditor(buildCodexUsagePanelItem(), { fromCache: false });
+      return;
+    }
+    renderList();
+  });
+
   try {
-    const forceReload = Boolean(options.forceReload);
     const selectFirst = Boolean(options.selectFirst);
     const params = new URLSearchParams();
     if (el.qInput.value.trim()) params.set("q", el.qInput.value.trim());
@@ -494,28 +1002,44 @@ async function loadMemos(options = {}) {
     if (selectFirst && visibleItems.length > 0) {
       fillEditor(visibleItems[0], { fromCache: listFromCache });
       state.hasInitialAutoSelection = true;
-      return;
+      return usageJob;
     }
     if (!state.selectedId && !state.hasInitialAutoSelection && visibleItems.length > 0) {
       const sorted = visibleItems;
       fillEditor(sorted[0], { fromCache: listFromCache });
       state.hasInitialAutoSelection = true;
-      return;
+      return usageJob;
     }
-    if (state.selectedId && !state.items.some((memo) => memo.id === state.selectedId)) {
+    if (state.selectedId && !isSpecialPanelId(state.selectedId) && !state.items.some((memo) => memo.id === state.selectedId)) {
       state.selectedId = null;
     }
-    if (state.showOnlyDeletable && state.selectedId && !visibleItems.some((memo) => memo.id === state.selectedId)) {
+    if (
+      !isSpecialPanelId(state.selectedId) &&
+      state.showOnlyDeletable &&
+      state.selectedId &&
+      !visibleItems.some((memo) => memo.id === state.selectedId)
+    ) {
       if (visibleItems.length > 0) {
         fillEditor(visibleItems[0], { fromCache: listFromCache });
       } else {
         fillEditor(null);
       }
-      return;
+      return usageJob;
     }
-    renderList();
+    if (state.selectedId === USAGE_OVERVIEW_PANEL_ID) {
+      fillEditor(buildUsageOverviewPanelItem(), { fromCache: false });
+    } else if (state.selectedId === USAGE_PANEL_ID) {
+      fillEditor(buildUsagePanelItem(), { fromCache: false });
+    } else if (state.selectedId === CODEX_USAGE_PANEL_ID) {
+      fillEditor(buildCodexUsagePanelItem(), { fromCache: false });
+    } else {
+      renderList();
+    }
+
+    return usageJob;
   } catch (error) {
     setStatus(`Load error: ${error.message}`, true);
+    await usageJob;
   }
 }
 
@@ -529,6 +1053,10 @@ async function loadMemo(id) {
 }
 
 async function saveMemo() {
+  if (isReadOnlyPanelSelected()) {
+    setStatus("Usage panel is read-only", true);
+    return;
+  }
   const payload = currentPayload();
   if (!payload.projectName || !payload.threadTitle || !payload.memoBody) {
     setStatus("projectName / threadTitle / memoBody are required", true);
@@ -560,6 +1088,10 @@ async function saveMemo() {
 }
 
 async function deleteSelectedMemo() {
+  if (isReadOnlyPanelSelected()) {
+    setStatus("Usage panel cannot be deleted", true);
+    return;
+  }
   if (!state.selectedId) {
     setStatus("Select a memo to delete", true);
     return;
@@ -643,7 +1175,7 @@ async function deleteMemo(ev) {
     state.showOnlyDeletable = !state.showOnlyDeletable;
     syncDeleteButtonLabel();
     const visibleItems = getVisibleItemsSorted();
-    if (state.showOnlyDeletable && state.selectedId && !visibleItems.some((memo) => memo.id === state.selectedId)) {
+    if (state.showOnlyDeletable && state.selectedId && !isSpecialPanelId(state.selectedId) && !visibleItems.some((memo) => memo.id === state.selectedId)) {
       if (visibleItems.length > 0) {
         fillEditor(visibleItems[0], { fromCache: false });
       } else {
@@ -668,6 +1200,10 @@ async function deleteMemo(ev) {
 }
 
 function downloadMemo(format) {
+  if (isReadOnlyPanelSelected()) {
+    setStatus("Usage panel download is disabled", true);
+    return;
+  }
   if (!state.selectedId) {
     setStatus("Select a memo to download", true);
     return;
@@ -733,6 +1269,10 @@ function buildExportFileName(memo, format) {
 }
 
 async function shareMemo() {
+  if (isReadOnlyPanelSelected()) {
+    setStatus("Usage panel share is disabled", true);
+    return;
+  }
   const format = el.downloadFormatSelect.value || "txt";
   const memo = currentMemoForExport();
   const body = buildExportBody(memo, format);
