@@ -603,8 +603,7 @@ function openUsageRefs() {
   window.open(CODEX_USAGE_PAGE_URL, "_blank", "noopener,noreferrer");
 }
 
-function renderMarkdownPreview() {
-  const source = el.memoBodyInput.value || "";
+function markdownToHtml(source) {
   let html = "";
   const markedLib = window.marked;
   if (markedLib) {
@@ -619,42 +618,107 @@ function renderMarkdownPreview() {
   if (window.DOMPurify && typeof window.DOMPurify.sanitize === "function") {
     html = window.DOMPurify.sanitize(html);
   }
-  el.memoPreview.innerHTML = html || "<p></p>";
-  linkifyLocalPathsInPreview(el.memoPreview);
-  annotateUsageRefLinks(el.memoPreview);
-  el.memoPreview.querySelectorAll("a").forEach((anchor) => {
+  return html || "<p></p>";
+}
+
+function applyMarkdownPreviewPresentation(root) {
+  if (!root) return;
+  linkifyLocalPathsInPreview(root);
+  annotateUsageRefLinks(root);
+  root.querySelectorAll("a").forEach((anchor) => {
     anchor.setAttribute("target", "_blank");
     anchor.setAttribute("rel", "noopener noreferrer");
   });
 
-  const preview = el.memoPreview;
-  preview.querySelectorAll("h1,h2,h3").forEach((n) => {
+  root.querySelectorAll("h1,h2,h3").forEach((n) => {
     n.style.fontWeight = "700";
     n.style.margin = "0.35em 0";
   });
-  preview.querySelectorAll("h1").forEach((n) => { n.style.fontSize = "1.2em"; });
-  preview.querySelectorAll("h2").forEach((n) => { n.style.fontSize = "1.1em"; });
-  preview.querySelectorAll("h3").forEach((n) => { n.style.fontSize = "1.0em"; });
-  preview.querySelectorAll("p").forEach((n) => { n.style.margin = "0.25em 0"; });
-  preview.querySelectorAll("ul,ol").forEach((n) => {
+  root.querySelectorAll("h1").forEach((n) => { n.style.fontSize = "1.2em"; });
+  root.querySelectorAll("h2").forEach((n) => { n.style.fontSize = "1.1em"; });
+  root.querySelectorAll("h3").forEach((n) => { n.style.fontSize = "1.0em"; });
+  root.querySelectorAll("p").forEach((n) => { n.style.margin = "0.25em 0"; });
+  root.querySelectorAll("ul,ol").forEach((n) => {
     n.style.margin = "0.25em 0";
     n.style.paddingLeft = "1.25em";
   });
   // Keep one visible blank-line feel before closing messages after bullet lists.
-  preview.querySelectorAll("ul + p, ol + p").forEach((n) => {
+  root.querySelectorAll("ul + p, ol + p").forEach((n) => {
     n.style.marginTop = "0.9em";
   });
-  preview.querySelectorAll("code").forEach((n) => {
+  root.querySelectorAll("code").forEach((n) => {
     n.style.background = "#e5e7eb";
     n.style.borderRadius = "4px";
     n.style.padding = "0 4px";
   });
-  preview.querySelectorAll("pre").forEach((n) => {
+  root.querySelectorAll("pre").forEach((n) => {
     n.style.background = "#e5e7eb";
     n.style.borderRadius = "8px";
     n.style.padding = "8px";
     n.style.overflow = "auto";
   });
+}
+
+function createRenderedMarkdownRoot(source) {
+  const root = document.createElement("article");
+  root.className = "markdown-preview";
+  root.style.position = "fixed";
+  root.style.left = "-99999px";
+  root.style.top = "0";
+  root.style.width = "min(720px, 96vw)";
+  root.style.visibility = "hidden";
+  root.style.pointerEvents = "none";
+  root.innerHTML = markdownToHtml(source || "");
+  document.body.appendChild(root);
+  applyMarkdownPreviewPresentation(root);
+  return root;
+}
+
+function markdownToPlainText(source) {
+  const root = createRenderedMarkdownRoot(source);
+  const text = String(root.innerText || root.textContent || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+  root.remove();
+  return text;
+}
+
+function markdownToStyledTextSegments(source) {
+  const root = createRenderedMarkdownRoot(source);
+  const segments = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    const value = String(node.nodeValue || "");
+    if (value.length > 0) {
+      const owner = node.parentElement || root;
+      const computed = window.getComputedStyle(owner);
+      const style = {
+        color: computed.color,
+        fontFamily: computed.fontFamily,
+        fontSize: computed.fontSize,
+        fontStyle: computed.fontStyle,
+        fontWeight: computed.fontWeight,
+        textDecoration: computed.textDecorationLine || computed.textDecoration || "none"
+      };
+      const prev = segments[segments.length - 1];
+      if (prev && JSON.stringify(prev.style) === JSON.stringify(style)) {
+        prev.text += value;
+      } else {
+        segments.push({ text: value, style });
+      }
+    }
+    node = walker.nextNode();
+  }
+  root.remove();
+  return segments;
+}
+
+function renderMarkdownPreview() {
+  const source = el.memoBodyInput.value || "";
+  el.memoPreview.innerHTML = markdownToHtml(source);
+  applyMarkdownPreviewPresentation(el.memoPreview);
 }
 
 function getBodyMode() {
@@ -1586,29 +1650,25 @@ function downloadMemo(format) {
     setStatus("Select a memo to download", true);
     return;
   }
-  if (isReadOnlyPanelSelected()) {
-    const memo = currentMemoForExport();
-    const body = buildExportBody(memo, format);
-    const fileName = ensureFileNameExtension(buildExportFileName(memo, format), format);
-    const typeMap = {
-      txt: "text/plain;charset=utf-8",
-      md: "text/markdown;charset=utf-8",
-      json: "application/json;charset=utf-8"
-    };
-    const blob = new Blob([body], { type: typeMap[format] || typeMap.txt });
-    const objectUrl = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = objectUrl;
-    a.download = fileName;
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(objectUrl);
-    setStatus(`Downloaded ${format.toUpperCase()} file`);
-    return;
-  }
-  window.location.href = `/api/memos/${encodeURIComponent(state.selectedId)}/download?format=${format}`;
+  const memo = currentMemoForExport();
+  const body = buildShareBody(memo, format);
+  const fileName = ensureFileNameExtension(buildThreadNameFileName(memo, format), format);
+  const typeMap = {
+    txt: "text/plain;charset=utf-8",
+    md: "text/markdown;charset=utf-8",
+    json: "application/json;charset=utf-8"
+  };
+  const blob = new Blob([body], { type: typeMap[format] || typeMap.txt });
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = fileName;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objectUrl);
+  setStatus(`Downloaded ${format.toUpperCase()} file`);
 }
 
 function currentMemoForExport() {
@@ -1626,45 +1686,27 @@ function currentMemoForExport() {
   };
 }
 
-function buildExportBody(memo, format) {
-  if (format === "json") {
-    return JSON.stringify(memo, null, 2);
-  }
+function buildShareBody(memo, format) {
+  const markdown = String(memo.memoBody || "");
   if (format === "md") {
-    return [
-      `# ${memo.threadTitle || "(no title)"}`,
-      "",
-      `- id: ${memo.id}`,
-      `- projectName: ${memo.projectName}`,
-      `- memoType: ${memo.memoType}`,
-      `- deletable: ${memo.deletable}`,
-      `- createdAtISO: ${memo.createdAtISO || ""}`,
-      `- updatedAtISO: ${memo.updatedAtISO || ""}`,
-      "",
-      "## Body",
-      "",
-      memo.memoBody || ""
-    ].join("\n");
+    return markdown;
   }
-  return [
-    `title: ${memo.threadTitle || ""}`,
-    `id: ${memo.id}`,
-    `projectName: ${memo.projectName}`,
-    `memoType: ${memo.memoType}`,
-    `deletable: ${memo.deletable}`,
-    `createdAtISO: ${memo.createdAtISO || ""}`,
-    `updatedAtISO: ${memo.updatedAtISO || ""}`,
-    "",
-    memo.memoBody || ""
-  ].join("\n");
+  if (format === "json") {
+    return JSON.stringify(markdownToStyledTextSegments(markdown), null, 2);
+  }
+  return markdownToPlainText(markdown);
 }
 
-function buildExportFileName(memo, format) {
-  const base = String(memo.threadTitle || memo.id || "memo")
-    .trim()
-    .replace(/[^\w.-]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 80) || "memo";
+function buildThreadNameFileName(memo, format) {
+  const threadName = String(memo.threadTitle || memo.threadName || memo.id || "memo").trim();
+  const base = threadName
+    // Remove characters commonly disallowed on major filesystems.
+    .replace(/[\/\\:*?"<>|]/g, "")
+    // Remove ASCII control chars.
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    // Avoid trailing dots/spaces (problematic on Windows).
+    .replace(/[. ]+$/g, "")
+    .trim() || "memo";
   return `${base}.${format}`;
 }
 
@@ -1678,8 +1720,8 @@ function ensureFileNameExtension(fileName, format) {
 async function shareMemo() {
   const format = el.downloadFormatSelect.value || "txt";
   const memo = currentMemoForExport();
-  const body = buildExportBody(memo, format);
-  const fileName = ensureFileNameExtension(buildExportFileName(memo, format), format);
+  const body = buildShareBody(memo, format);
+  const fileName = ensureFileNameExtension(buildThreadNameFileName(memo, format), format);
   const typeMap = {
     txt: "text/plain;charset=utf-8",
     md: "text/markdown;charset=utf-8",
