@@ -5,6 +5,8 @@
   "description": "Shared tooling for Codex app workflows",
   "main": "scripts/save_firestore_memo.js",
   "scripts": {
+    "app:build": "apps/codex-tools-menubar/build.sh",
+    "app:build:legacy-dual": "apps/legacy-dual-launcher/build.sh",
     "memo:save": "node scripts/save_firestore_memo.js",
     "memo:thread": "node scripts/save_thread_memo.js",
     "memo:web": "node scripts/codex_memo_web_server.js",
