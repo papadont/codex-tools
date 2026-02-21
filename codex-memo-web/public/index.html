@@ -5,6 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>codex-memo</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <script>
+      (() => {
+        const originalWarn = console.warn.bind(console);
+        console.warn = (...args) => {
+          const first = String(args && args[0] ? args[0] : "");
+          if (first.includes("cdn.tailwindcss.com should not be used in production")) {
+            return;
+          }
+          originalWarn(...args);
+        };
+      })();
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>

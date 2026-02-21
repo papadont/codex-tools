@@ -676,6 +676,7 @@ function renderList() {
   const fsPeak = Math.max(fsSnapshot.ratePercent.read, fsSnapshot.ratePercent.write, fsSnapshot.ratePercent.delete);
   const codexPrimary = state.codexUsageSummary?.primaryWindow || null;
   const codexSecondary = state.codexUsageSummary?.secondaryWindow || null;
+  const usageActive = isUsageOverviewPanelSelected();
 
   const row = document.createElement("div");
   row.className = "grid grid-cols-2 gap-1.5";
@@ -788,7 +789,9 @@ function renderList() {
   const usageTop = document.createElement("div");
   usageTop.className = state.usageTileCollapsed
     ? "mb-1 flex cursor-pointer items-center justify-between rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1"
-    : "mb-1 flex cursor-pointer items-center justify-between px-1";
+    : usageActive
+      ? "mb-1 flex cursor-pointer items-center justify-between rounded-md border border-[#ddd5c8] bg-[#fefdfb] px-2 py-1"
+      : "mb-1 flex cursor-pointer items-center justify-between px-1";
   const usageLabel = document.createElement("span");
   usageLabel.className = state.usageTileCollapsed
     ? "hidden"
@@ -1014,9 +1017,10 @@ function fillEditor(item, options = {}) {
   el.memoTypeInput.disabled = isReadOnlyPanel;
   el.saveBtn.disabled = isReadOnlyPanel;
   el.deleteBtn.disabled = isReadOnlyPanel;
-  el.downloadFormatSelect.disabled = isReadOnlyPanel;
-  el.downloadBtn.disabled = isReadOnlyPanel;
-  el.shareBtn.disabled = isReadOnlyPanel;
+  // Export actions are allowed for usage panels as read-only snapshots.
+  el.downloadFormatSelect.disabled = false;
+  el.downloadBtn.disabled = false;
+  el.shareBtn.disabled = false;
   syncDeleteButtonLabel();
   el.deleteBtn.title = isReadOnlyPanel
     ? "Delete is disabled in usage panel"
@@ -1334,12 +1338,30 @@ async function deleteMemo(ev) {
 }
 
 function downloadMemo(format) {
-  if (isReadOnlyPanelSelected()) {
-    setStatus("Usage panel download is disabled", true);
-    return;
-  }
   if (!state.selectedId) {
     setStatus("Select a memo to download", true);
+    return;
+  }
+  if (isReadOnlyPanelSelected()) {
+    const memo = currentMemoForExport();
+    const body = buildExportBody(memo, format);
+    const fileName = ensureFileNameExtension(buildExportFileName(memo, format), format);
+    const typeMap = {
+      txt: "text/plain;charset=utf-8",
+      md: "text/markdown;charset=utf-8",
+      json: "application/json;charset=utf-8"
+    };
+    const blob = new Blob([body], { type: typeMap[format] || typeMap.txt });
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = fileName;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objectUrl);
+    setStatus(`Downloaded ${format.toUpperCase()} file`);
     return;
   }
   window.location.href = `/api/memos/${encodeURIComponent(state.selectedId)}/download?format=${format}`;
@@ -1402,43 +1424,89 @@ function buildExportFileName(memo, format) {
   return `${base}.${format}`;
 }
 
+function ensureFileNameExtension(fileName, format) {
+  const normalized = String(fileName || "").trim() || `memo.${format}`;
+  const lower = normalized.toLowerCase();
+  const suffix = `.${String(format || "txt").toLowerCase()}`;
+  return lower.endsWith(suffix) ? normalized : `${normalized}${suffix}`;
+}
+
 async function shareMemo() {
-  if (isReadOnlyPanelSelected()) {
-    setStatus("Usage panel share is disabled", true);
-    return;
-  }
   const format = el.downloadFormatSelect.value || "txt";
   const memo = currentMemoForExport();
   const body = buildExportBody(memo, format);
-  const fileName = buildExportFileName(memo, format);
+  const fileName = ensureFileNameExtension(buildExportFileName(memo, format), format);
   const typeMap = {
     txt: "text/plain;charset=utf-8",
     md: "text/markdown;charset=utf-8",
     json: "application/json;charset=utf-8"
   };
+  const downloadAsFallback = (reasonText) => {
+    const blob = new Blob([body], { type: typeMap[format] || typeMap.txt });
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = fileName;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objectUrl);
+    setStatus(`${reasonText ? `${reasonText}. ` : ""}Downloaded ${format.toUpperCase()} file`);
+  };
   const copyAsFallback = async (reasonText) => {
     if (!navigator.clipboard || !navigator.clipboard.writeText) {
-      throw new Error(reasonText ? `${reasonText} and Clipboard API unavailable` : "Clipboard API unavailable");
+      downloadAsFallback(reasonText ? `${reasonText} and Clipboard API unavailable` : "Clipboard API unavailable");
+      return;
     }
     await navigator.clipboard.writeText(body);
     setStatus(`${reasonText ? `${reasonText}. ` : ""}Copied ${format.toUpperCase()} text`);
   };
-
   try {
+    if (navigator.userActivation && !navigator.userActivation.isActive) {
+      await copyAsFallback("Web Share blocked (no active user gesture)");
+      return;
+    }
+
+    if (window.self !== window.top && document.permissionsPolicy && !document.permissionsPolicy.allowsFeature("web-share")) {
+      await copyAsFallback("Web Share blocked in iframe (allow=web-share required)");
+      return;
+    }
+
     if (!navigator.share) {
       await copyAsFallback("Web Share unavailable");
+      return;
+    }
+
+    // Desktop browsers (especially Chrome on macOS) often deny file-based share
+    // even when text share works in the same user gesture.
+    if (format === "txt" || format === "md" || format === "json") {
+      await navigator.share({
+        title: memo.threadTitle || "codex-memo",
+        text: body
+      });
+      setStatus(`Shared as ${format.toUpperCase()} text`);
       return;
     }
 
     if (typeof File !== "undefined" && navigator.canShare) {
       const file = new File([body], fileName, { type: typeMap[format] || typeMap.txt });
       if (navigator.canShare({ files: [file] })) {
-        await navigator.share({
-          title: memo.threadTitle || "codex-memo",
-          files: [file]
-        });
-        setStatus(`Shared ${format.toUpperCase()} file`);
-        return;
+        try {
+          await navigator.share({
+            title: memo.threadTitle || "codex-memo",
+            files: [file]
+          });
+          setStatus(`Shared ${format.toUpperCase()} file`);
+          return;
+        } catch (fileShareError) {
+          const denied = String(fileShareError?.name || "").toLowerCase();
+          if (denied === "notallowederror" || denied === "permissiondeniederror") {
+            await copyAsFallback(`File share blocked (${fileShareError.name || "NotAllowedError"})`);
+            return;
+          }
+          throw fileShareError;
+        }
       }
     }
 
