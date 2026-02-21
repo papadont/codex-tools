@@ -20,6 +20,33 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+    <style>
+      .local-path-link {
+        color: #4e6f9f;
+        text-decoration: none;
+        text-underline-offset: 2px;
+        cursor: pointer;
+      }
+      .local-path-link:hover {
+        text-decoration: underline;
+      }
+      .usage-ref-link,
+      .usage-refs-trigger {
+        color: #4e6f9f;
+        text-decoration: none;
+        text-underline-offset: 2px;
+        cursor: pointer;
+      }
+      .usage-ref-link:hover,
+      .usage-refs-trigger:hover {
+        text-decoration: underline;
+      }
+      .markdown-preview a[href^="http://"],
+      .markdown-preview a[href^="https://"] {
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+    </style>
   </head>
   <body class="min-h-screen bg-[#f7f5f1] p-2 text-[#4b5568]">
     <div class="mx-auto min-h-[calc(100vh-1rem)] max-w-[1320px] overflow-hidden rounded-2xl border border-[#ebe7e0] bg-[#fffefd]">
@@ -47,7 +74,7 @@
         </aside>
 
         <section class="relative flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden overflow-y-auto bg-[#fefcf9] px-4 pb-1 pt-2">
-          <div class="absolute right-4 top-2 z-10 text-right text-[11px] text-[#7a8398]">
+          <div class="absolute right-4 top-2 z-10 flex items-center gap-1.5 text-right text-[11px] text-[#7a8398]">
             <span id="dateText" class="block">-</span>
           </div>
           <div class="mb-2 flex flex-wrap items-end gap-2">
@@ -109,6 +136,6 @@
       </main>
     </div>
 
-    <script src="/app.js"></script>
+    <script src="/app.js?v=20260221-01"></script>
   </body>
 </html>

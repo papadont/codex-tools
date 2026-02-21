@@ -2,6 +2,7 @@
 
 const path = require("path");
 const fs = require("fs");
+const { spawn } = require("child_process");
 const express = require("express");
 const admin = require("firebase-admin");
 const { GoogleAuth } = require("google-auth-library");
@@ -440,6 +441,44 @@ function buildDownloadBody(memo, format) {
   ].join("\n");
 }
 
+function normalizeOpenPath(raw) {
+  const requestedPath = String(raw || "").trim();
+  if (!requestedPath) throw new Error("path is required.");
+  if (requestedPath.includes("\0")) throw new Error("Invalid path.");
+  let value = requestedPath
+    .replace(/^[("'`[\{<]+/, "")
+    .replace(/[)"'`\]}>.,;!?]+$/, "")
+    .trim();
+  if (!path.isAbsolute(value)) throw new Error("path must be absolute.");
+
+  const candidates = [
+    value,
+    value.replace(/:(?:\d+(?:-\d+)?)(?:[,\s]+(?:\d+(?:-\d+)?))*\s*$/, "").trim(),
+    value.replace(/:\d[\d,\-\s]*$/, "").trim(),
+    value.replace(/\s+\d+(?:-\d+)?(?:[,\s]+\d+(?:-\d+)?)*\s*$/, "").trim()
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return { requestedPath, normalizedPath: candidate };
+    }
+  }
+  throw new Error("File not found.");
+}
+
+function openPathWithDefaultApp(targetPath) {
+  const command = process.platform === "darwin"
+    ? "open"
+    : process.platform === "win32"
+      ? "cmd"
+      : "xdg-open";
+  const args = process.platform === "win32"
+    ? ["/c", "start", "", targetPath]
+    : [targetPath];
+  const child = spawn(command, args, { stdio: "ignore", detached: true });
+  child.unref();
+}
+
 async function main() {
   const db = initFirestore();
   const app = express();
@@ -736,6 +775,17 @@ async function main() {
       res.send(body);
     } catch (error) {
       res.status(500).json({ error: error.message || "Failed to download memo." });
+    }
+  });
+
+  app.post("/api/open-local", async (req, res) => {
+    try {
+      const { requestedPath, normalizedPath } = normalizeOpenPath(req.body.path);
+      const targetPath = normalizedPath;
+      openPathWithDefaultApp(targetPath);
+      res.json({ ok: true, path: requestedPath, openedPath: targetPath });
+    } catch (error) {
+      res.status(400).json({ error: error.message || "Failed to open local file." });
     }
   });
 

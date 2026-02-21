@@ -1,6 +1,7 @@
 const state = {
   items: [],
   selectedId: null,
+  editorBaseline: null,
   hasInitialAutoSelection: false,
   lastResponseCacheHit: false,
   selectedCacheHit: false,
@@ -25,6 +26,13 @@ const FIRESTORE_USAGE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const CODEX_USAGE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
 let usageRefreshInFlight = null;
+
+function usageSourceFooterLines() {
+  return [
+    "",
+    `<small><a href="#" class="usage-refs-trigger" data-open-usage-refs="1">refs:</a> [firebase usage](${FIREBASE_USAGE_PAGE_URL}) | [codex usage](${CODEX_USAGE_PAGE_URL})</small>`
+  ];
+}
 
 const el = {
   memoList: document.getElementById("memoList"),
@@ -224,6 +232,7 @@ function buildUsageOverviewBody() {
     lines.push(`| ${day.date || "-"} | ${day.read || 0} | ${day.write || 0} | ${day.delete || 0} | ${day.total || 0} |`);
   }
 
+  lines.push(...usageSourceFooterLines());
   return lines.join("\n");
 }
 
@@ -245,7 +254,7 @@ function buildUsageBody(summary) {
       "# Firestore usage",
       "",
       "usage data is not loaded yet."
-    ].join("\n");
+    ].concat(usageSourceFooterLines()).join("\n");
   }
 
   const perDayRaw = Array.isArray(summary.perDay) ? summary.perDay : [];
@@ -290,6 +299,7 @@ function buildUsageBody(summary) {
     lines.push("", summary.note);
   }
 
+  lines.push(...usageSourceFooterLines());
   return lines.join("\n");
 }
 
@@ -311,7 +321,7 @@ function buildCodexUsageBody(summary) {
       "# Codex usage",
       "",
       "usage data is not loaded yet."
-    ].join("\n");
+    ].concat(usageSourceFooterLines()).join("\n");
   }
 
   const primary = summary.primaryWindow || null;
@@ -341,7 +351,8 @@ function buildCodexUsageBody(summary) {
     `- has credits: ${summary.credits?.hasCredits ? "yes" : "no"} / unlimited: ${summary.credits?.unlimited ? "yes" : "no"}`,
     `- balance: ${summary.credits?.balance || "0"}`,
     `- approx local messages: ${(summary.credits?.approxLocalMessages || [0, 0]).join(" .. ")}`,
-    `- approx cloud messages: ${(summary.credits?.approxCloudMessages || [0, 0]).join(" .. ")}`
+    `- approx cloud messages: ${(summary.credits?.approxCloudMessages || [0, 0]).join(" .. ")}`,
+    ...usageSourceFooterLines()
   ].join("\n");
 }
 
@@ -371,11 +382,225 @@ function currentPayload() {
   };
 }
 
+function currentEditorSnapshot() {
+  return {
+    projectName: el.projectNameInput.value,
+    memoType: el.memoTypeInput.value,
+    threadTitle: el.threadTitleInput.value,
+    memoBody: el.memoBodyInput.value
+  };
+}
+
+function hasRequiredPayloadFields() {
+  return Boolean(
+    el.projectNameInput.value.trim() &&
+    el.threadTitleInput.value.trim() &&
+    el.memoBodyInput.value.trim()
+  );
+}
+
+function isSameSnapshot(a, b) {
+  if (!a || !b) return false;
+  return (
+    a.projectName === b.projectName &&
+    a.memoType === b.memoType &&
+    a.threadTitle === b.threadTitle &&
+    a.memoBody === b.memoBody
+  );
+}
+
+function updateSaveButtonState() {
+  if (isReadOnlyPanelSelected()) {
+    el.saveBtn.disabled = true;
+    return;
+  }
+  if (!hasRequiredPayloadFields()) {
+    el.saveBtn.disabled = true;
+    return;
+  }
+  const dirty = !isSameSnapshot(currentEditorSnapshot(), state.editorBaseline);
+  el.saveBtn.disabled = !dirty;
+}
+
 function escapeHtml(text) {
   return String(text || "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+const LOCAL_PATH_REGEX = /(?:\/Users|\/tmp|\/var)\/[^\s"'`<>:]+(?::\d+(?:-\d+)?(?:[,\s]+\d+(?:-\d+)?)*)?/gi;
+const LOCAL_PATH_TOKEN_REGEX = /^\/(?:Users|tmp|var)\/[^\s"'`<>:]+(?::\d+(?:-\d+)?(?:[,\s]+\d+(?:-\d+)?)*)?$/i;
+
+function extractLinks(text) {
+  const source = String(text || "");
+  const markdownLinkRegex = /\[[^\]]+\]\((https?:\/\/[^\s)]+)\)/g;
+  const bareUrlRegex = /\bhttps?:\/\/[^\s<>()]+/g;
+  const links = [];
+  const seen = new Set();
+  let stripped = source;
+
+  stripped = stripped.replace(markdownLinkRegex, (_, url) => {
+    const cleaned = String(url || "").trim();
+    if (cleaned && !seen.has(cleaned)) {
+      seen.add(cleaned);
+      links.push(cleaned);
+    }
+    return " ";
+  });
+
+  let match = bareUrlRegex.exec(stripped);
+  while (match) {
+    const cleaned = String(match[0] || "").trim().replace(/[),.;!?]+$/, "");
+    if (cleaned && !seen.has(cleaned)) {
+      seen.add(cleaned);
+      links.push(cleaned);
+    }
+    match = bareUrlRegex.exec(stripped);
+  }
+  return links;
+}
+
+function extractLocalPaths(text) {
+  const source = String(text || "");
+  const paths = [];
+  const seen = new Set();
+  LOCAL_PATH_REGEX.lastIndex = 0;
+  let match = LOCAL_PATH_REGEX.exec(source);
+  while (match) {
+    const cleaned = normalizePathToken(String(match[0] || "").trim());
+    if (cleaned && !seen.has(cleaned)) {
+      seen.add(cleaned);
+      paths.push(cleaned);
+    }
+    match = LOCAL_PATH_REGEX.exec(source);
+  }
+  return paths;
+}
+
+function hasBodyLink(text) {
+  return extractLinks(text).length > 0 || extractLocalPaths(text).length > 0;
+}
+
+function normalizePathToken(raw) {
+  return String(raw || "").replace(/^[("'`[\{<]+/, "").replace(/[)"'`\]}>.,;!?]+$/, "").trim();
+}
+
+function stripPathLocationSuffix(value) {
+  return String(value || "")
+    .replace(/:(?:\d+(?:-\d+)?)(?:[,\s]+\d+(?:-\d+)?)*\s*$/, "")
+    .trim();
+}
+
+function splitPathAndLocation(value) {
+  const token = String(value || "").trim();
+  const base = stripPathLocationSuffix(token);
+  if (!token.startsWith(base)) {
+    return { base: token, location: "" };
+  }
+  return { base, location: token.slice(base.length) };
+}
+
+function isLocalPathToken(value) {
+  return LOCAL_PATH_TOKEN_REGEX.test(String(value || "").trim());
+}
+
+function tokenAtCursor(text, cursorIndex) {
+  const source = String(text || "");
+  const index = Math.max(0, Math.min(source.length, Number(cursorIndex) || 0));
+  let start = index;
+  let end = index;
+  while (start > 0 && !/\s/.test(source[start - 1])) start -= 1;
+  while (end < source.length && !/\s/.test(source[end])) end += 1;
+  return normalizePathToken(source.slice(start, end));
+}
+
+async function openLocalPath(localPath) {
+  const requested = normalizePathToken(localPath);
+  const normalized = stripPathLocationSuffix(requested);
+  const data = await request("/api/open-local", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path: normalized, originalPath: requested })
+  });
+  setStatus(`Opened: ${data.openedPath || data.path || normalized}`, false, "force");
+}
+
+async function tryOpenPathAtCursor() {
+  const token = tokenAtCursor(el.memoBodyInput.value || "", el.memoBodyInput.selectionStart || 0);
+  if (!isLocalPathToken(token)) return false;
+  await openLocalPath(token);
+  return true;
+}
+
+function linkifyLocalPathsInPreview(root) {
+  if (!root) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const targets = [];
+  let node = walker.nextNode();
+  while (node) {
+    const parentName = node.parentElement ? node.parentElement.tagName : "";
+    if (
+      node.nodeValue &&
+      /\/(?:Users|tmp|var)\//.test(node.nodeValue) &&
+      !["A", "CODE", "PRE", "SCRIPT", "STYLE"].includes(parentName)
+    ) {
+      targets.push(node);
+    }
+    node = walker.nextNode();
+  }
+
+  for (const textNode of targets) {
+    const source = String(textNode.nodeValue || "");
+    LOCAL_PATH_REGEX.lastIndex = 0;
+    const matches = [...source.matchAll(LOCAL_PATH_REGEX)];
+    if (!matches.length) continue;
+    const frag = document.createDocumentFragment();
+    let cursor = 0;
+    for (const m of matches) {
+      const start = Number(m.index || 0);
+      const raw = String(m[0] || "");
+      if (start > cursor) {
+        frag.appendChild(document.createTextNode(source.slice(cursor, start)));
+      }
+      const pathToken = normalizePathToken(raw);
+      if (isLocalPathToken(pathToken)) {
+        const { base: openPath, location } = splitPathAndLocation(pathToken);
+        const a = document.createElement("a");
+        a.href = "#";
+        a.className = "local-path-link";
+        a.dataset.localPath = openPath;
+        a.title = `Open local file: ${openPath}`;
+        a.textContent = openPath;
+        frag.appendChild(a);
+        if (location) {
+          frag.appendChild(document.createTextNode(location));
+        }
+      } else {
+        frag.appendChild(document.createTextNode(raw));
+      }
+      cursor = start + raw.length;
+    }
+    if (cursor < source.length) {
+      frag.appendChild(document.createTextNode(source.slice(cursor)));
+    }
+    textNode.replaceWith(frag);
+  }
+}
+
+function annotateUsageRefLinks(root) {
+  if (!root) return;
+  root.querySelectorAll("a").forEach((anchor) => {
+    const href = String(anchor.getAttribute("href") || "").trim();
+    if (href === FIREBASE_USAGE_PAGE_URL || href === CODEX_USAGE_PAGE_URL) {
+      anchor.classList.add("usage-ref-link");
+    }
+  });
+}
+
+function openUsageRefs() {
+  window.open(FIREBASE_USAGE_PAGE_URL, "_blank", "noopener,noreferrer");
+  window.open(CODEX_USAGE_PAGE_URL, "_blank", "noopener,noreferrer");
 }
 
 function renderMarkdownPreview() {
@@ -395,6 +620,12 @@ function renderMarkdownPreview() {
     html = window.DOMPurify.sanitize(html);
   }
   el.memoPreview.innerHTML = html || "<p></p>";
+  linkifyLocalPathsInPreview(el.memoPreview);
+  annotateUsageRefLinks(el.memoPreview);
+  el.memoPreview.querySelectorAll("a").forEach((anchor) => {
+    anchor.setAttribute("target", "_blank");
+    anchor.setAttribute("rel", "noopener noreferrer");
+  });
 
   const preview = el.memoPreview;
   preview.querySelectorAll("h1,h2,h3").forEach((n) => {
@@ -888,9 +1119,21 @@ function renderList() {
     typeBadge.textContent = displayMemoTypeLabel(item.memoType);
     const metaText = document.createElement("small");
     metaText.className = "block min-w-0 truncate whitespace-nowrap text-[9px] leading-3.5 text-[#78829a]";
-    metaText.textContent = `${item.projectName} | ${formatDate(item.datetimeISO || item.createdAtISO)}`;
+    metaText.textContent = `${item.projectName}`;
+    const dateText = document.createElement("small");
+    dateText.className = "shrink-0 whitespace-nowrap text-[9px] leading-3.5 text-[#7f8aa3]";
+    dateText.textContent = formatDate(item.datetimeISO || item.createdAtISO);
     meta.appendChild(typeBadge);
     meta.appendChild(metaText);
+    meta.appendChild(dateText);
+
+    if (hasBodyLink(item.memoBody || "")) {
+      const linkBadge = document.createElement("span");
+      linkBadge.className = "inline-flex h-3.5 shrink-0 items-center rounded border border-[#d6dce8] px-1 text-[8px] font-medium leading-none text-[#7a859e]";
+      linkBadge.textContent = "link";
+      linkBadge.title = "Body contains link/path";
+      meta.appendChild(linkBadge);
+    }
 
     li.appendChild(topRow);
     li.appendChild(meta);
@@ -1015,7 +1258,8 @@ function fillEditor(item, options = {}) {
   el.threadTitleInput.readOnly = isReadOnlyPanel;
   el.memoBodyInput.readOnly = isReadOnlyPanel;
   el.memoTypeInput.disabled = isReadOnlyPanel;
-  el.saveBtn.disabled = isReadOnlyPanel;
+  state.editorBaseline = isReadOnlyPanel ? null : currentEditorSnapshot();
+  updateSaveButtonState();
   el.deleteBtn.disabled = isReadOnlyPanel;
   // Export actions are allowed for usage panels as read-only snapshots.
   el.downloadFormatSelect.disabled = false;
@@ -1584,7 +1828,45 @@ function initEvents() {
     if (getBodyMode() === "preview") {
       renderMarkdownPreview();
     }
+    updateSaveButtonState();
   });
+  el.memoBodyInput.addEventListener("click", async (ev) => {
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+    ev.preventDefault();
+    try {
+      const opened = await tryOpenPathAtCursor();
+      if (!opened) {
+        setStatus("No local path token at cursor", true);
+      }
+    } catch (error) {
+      setStatus(`Open error: ${error.message}`, true);
+    }
+  });
+  el.memoPreview.addEventListener("click", async (ev) => {
+    const refsTrigger = ev.target && ev.target.closest ? ev.target.closest("a[data-open-usage-refs]") : null;
+    if (refsTrigger) {
+      ev.preventDefault();
+      openUsageRefs();
+      setStatus("Opened usage refs");
+      return;
+    }
+    const target = ev.target && ev.target.closest ? ev.target.closest("a[data-local-path]") : null;
+    if (!target) return;
+    ev.preventDefault();
+    const localPath = normalizePathToken(target.dataset.localPath || "");
+    if (!isLocalPathToken(localPath)) {
+      setStatus("Invalid local path token", true);
+      return;
+    }
+    try {
+      await openLocalPath(localPath);
+    } catch (error) {
+      setStatus(`Open error: ${error.message}`, true);
+    }
+  });
+  el.projectNameInput.addEventListener("input", updateSaveButtonState);
+  el.threadTitleInput.addEventListener("input", updateSaveButtonState);
+  el.memoTypeInput.addEventListener("change", updateSaveButtonState);
 
   el.saveBtn.addEventListener("click", saveMemo);
   el.deleteBtn.addEventListener("click", deleteMemo);
