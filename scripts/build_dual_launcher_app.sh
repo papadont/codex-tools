@@ -11,8 +11,8 @@ rm -rf "$APP_PATH"
 TMP_SCRIPT="$(mktemp)"
 cat > "$TMP_SCRIPT" <<'APPLESCRIPT'
 on run
-  set hushCmd to "pkill -f '/Documents/develop/hush-pointer.*npm run dev' || true; pkill -f '/Documents/develop/hush-pointer.*vite' || true; cd /Documents/develop/hush-pointer && npm run dev"
-  set memoCmd to "pkill -f 'node .*scripts/codex_memo_web_server\\.js' || true; pkill -f '/Documents/develop/codex-tools.*npm run memo:web' || true; export GOOGLE_APPLICATION_CREDENTIALS='/.config/gcp/codex-tools-firestore-sa.json' && cd /Documents/develop/codex-tools && npm run memo:web"
+  set hushCmd to "pkill -f '$HOME/Documents/develop/hush-pointer.*npm run dev' || true; pkill -f '$HOME/Documents/develop/hush-pointer.*vite' || true; cd \"$HOME/Documents/develop/hush-pointer\" && npm run dev"
+  set memoCmd to "pkill -f 'node .*scripts/codex_memo_web_server\\.js' || true; pkill -f '$HOME/Documents/develop/codex-tools.*npm run memo:web' || true; export GOOGLE_APPLICATION_CREDENTIALS=\"${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcp/codex-tools-firestore-sa.json}\" && cd \"$HOME/Documents/develop/codex-tools\" && npm run memo:web"
 
   tell application "Terminal"
     activate

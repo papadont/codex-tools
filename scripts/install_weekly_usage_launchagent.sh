@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/Documents/develop/codex-tools"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+NPM_BIN="${NPM_BIN:-$(command -v npm || true)}"
+DEFAULT_CREDENTIALS="$HOME/.config/gcp/codex-tools-firestore-sa.json"
+CREDENTIALS="${GOOGLE_APPLICATION_CREDENTIALS:-$DEFAULT_CREDENTIALS}"
 PLIST_PATH="$HOME/Library/LaunchAgents/dev.hideki.codextools.weekly-usage.plist"
 LOG_OUT="/tmp/codex-tools-weekly-usage.out.log"
 LOG_ERR="/tmp/codex-tools-weekly-usage.err.log"
+
+if [ -z "$NPM_BIN" ]; then
+  echo "npm command not found. Set NPM_BIN."
+  exit 1
+fi
+
+LAUNCH_CMD="cd \"$ROOT_DIR\" && export GOOGLE_APPLICATION_CREDENTIALS=\"$CREDENTIALS\" && \"$NPM_BIN\" run usage:weekly"
+LAUNCH_CMD_XML="$(printf '%s' "$LAUNCH_CMD" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
 
 mkdir -p "$HOME/Library/LaunchAgents"
 
@@ -20,7 +32,7 @@ cat > "$PLIST_PATH" <<PLIST
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>cd /Documents/develop/codex-tools &amp;&amp; export GOOGLE_APPLICATION_CREDENTIALS=/.config/gcp/codex-tools-firestore-sa.json &amp;&amp; /opt/homebrew/bin/npm run usage:weekly</string>
+    <string>$LAUNCH_CMD_XML</string>
   </array>
 
   <key>EnvironmentVariables</key>

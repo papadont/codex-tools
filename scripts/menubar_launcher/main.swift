@@ -8,9 +8,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var codexResetStatusItem: NSMenuItem!
   private var statusTimer: Timer?
 
+  private let homeDir = NSHomeDirectory()
+  private lazy var hushDir = "\(homeDir)/Documents/develop/hush-pointer"
+  private lazy var codexToolsDir = "\(homeDir)/Documents/develop/codex-tools"
+  private lazy var credentialsPath = ProcessInfo.processInfo.environment["GOOGLE_APPLICATION_CREDENTIALS"]
+    ?? "\(homeDir)/.config/gcp/codex-tools-firestore-sa.json"
   private let hushLogPath = "/tmp/hush-pointer-dev.log"
   private let memoLogPath = "/tmp/codex-memo-web.log"
-  private let usageLatestPath = "/Documents/develop/codex-tools/dist/usage-reports/weekly/latest.json"
+  private lazy var usageLatestPath = "\(codexToolsDir)/dist/usage-reports/weekly/latest.json"
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
@@ -113,18 +118,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func restartHush() {
-    runShell("pkill -f '/Documents/develop/hush-pointer.*npm run dev' || true")
-    runShell("pkill -f '/Documents/develop/hush-pointer.*vite' || true")
+    runShell("pkill -f \(shellQuote("\(regexEscape(hushDir)).*npm run dev")) || true")
+    runShell("pkill -f \(shellQuote("\(regexEscape(hushDir)).*vite")) || true")
     hushProcess?.terminate()
-    hushProcess = launchShell("cd /Documents/develop/hush-pointer && npm run dev >> '\(hushLogPath)' 2>&1")
+    hushProcess = launchShell("cd \(shellQuote(hushDir)) && npm run dev >> \(shellQuote(hushLogPath)) 2>&1")
     updateStatusItems()
   }
 
   private func restartMemo() {
     runShell("pkill -f 'node .*scripts/codex_memo_web_server\\.js' || true")
-    runShell("pkill -f '/Documents/develop/codex-tools.*npm run memo:web' || true")
+    runShell("pkill -f \(shellQuote("\(regexEscape(codexToolsDir)).*npm run memo:web")) || true")
     memoProcess?.terminate()
-    memoProcess = launchShell("export GOOGLE_APPLICATION_CREDENTIALS='/.config/gcp/codex-tools-firestore-sa.json'; cd /Documents/develop/codex-tools && npm run memo:web >> '\(memoLogPath)' 2>&1")
+    memoProcess = launchShell("export GOOGLE_APPLICATION_CREDENTIALS=\(shellQuote(credentialsPath)); cd \(shellQuote(codexToolsDir)) && npm run memo:web >> \(shellQuote(memoLogPath)) 2>&1")
     updateStatusItems()
   }
 
@@ -135,8 +140,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func stopHush() {
-    runShell("pkill -f '/Documents/develop/hush-pointer.*npm run dev' || true")
-    runShell("pkill -f '/Documents/develop/hush-pointer.*vite' || true")
+    runShell("pkill -f \(shellQuote("\(regexEscape(hushDir)).*npm run dev")) || true")
+    runShell("pkill -f \(shellQuote("\(regexEscape(hushDir)).*vite")) || true")
     hushProcess?.terminate()
     hushProcess = nil
     updateStatusItems()
@@ -144,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func stopMemo() {
     runShell("pkill -f 'node .*scripts/codex_memo_web_server\\.js' || true")
-    runShell("pkill -f '/Documents/develop/codex-tools.*npm run memo:web' || true")
+    runShell("pkill -f \(shellQuote("\(regexEscape(codexToolsDir)).*npm run memo:web")) || true")
     memoProcess?.terminate()
     memoProcess = nil
     updateStatusItems()
@@ -217,13 +222,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func isHushRunning() -> Bool {
-    return pgrep(pattern: "/Documents/develop/hush-pointer.*npm run dev")
-      || pgrep(pattern: "/Documents/develop/hush-pointer.*vite")
+    return pgrep(pattern: "\(regexEscape(hushDir)).*npm run dev")
+      || pgrep(pattern: "\(regexEscape(hushDir)).*vite")
   }
 
   private func isMemoRunning() -> Bool {
     return pgrep(pattern: "node .*scripts/codex_memo_web_server\\.js")
-      || pgrep(pattern: "/Documents/develop/codex-tools.*npm run memo:web")
+      || pgrep(pattern: "\(regexEscape(codexToolsDir)).*npm run memo:web")
+  }
+
+  private func shellQuote(_ value: String) -> String {
+    return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+  }
+
+  private func regexEscape(_ value: String) -> String {
+    return NSRegularExpression.escapedPattern(for: value)
   }
 
   private func pgrep(pattern: String) -> Bool {

@@ -44,7 +44,7 @@ codex-memo-thread --kind "propomemo" --body "移管後テスト: propomemo"
 ## セットアップ
 
 ```bash
-cd /Documents/develop/codex-tools
+cd "$HOME/Documents/develop/codex-tools"
 npm install
 ```
 
@@ -157,7 +157,7 @@ Progress log
 ## グローバル導入
 
 ```bash
-/Documents/develop/codex-tools/scripts/install_global_memo_tool.sh
+"$HOME/Documents/develop/codex-tools/scripts/install_global_memo_tool.sh"
 ```
 
 必要ならPATH追加:
@@ -169,5 +169,5 @@ export PATH="$HOME/.codex/bin:$PATH"
 ## 各プロジェクトへルール追記
 
 ```bash
-/Documents/develop/codex-tools/scripts/setup_project_memo_rule.sh /absolute/path/to/project
+"$HOME/Documents/develop/codex-tools/scripts/setup_project_memo_rule.sh" /absolute/path/to/project
 ```

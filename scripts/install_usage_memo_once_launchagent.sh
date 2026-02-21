@@ -6,11 +6,25 @@ if [ "${1:-}" = "" ]; then
   exit 1
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+NPM_BIN="${NPM_BIN:-$(command -v npm || true)}"
+DEFAULT_CREDENTIALS="$HOME/.config/gcp/codex-tools-firestore-sa.json"
+CREDENTIALS="${GOOGLE_APPLICATION_CREDENTIALS:-$DEFAULT_CREDENTIALS}"
+
 TRIGGER_ISO="$1"
 LABEL="dev.hideki.codextools.usage-memo-trigger-once"
 PLIST_PATH="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_OUT="/tmp/codex-tools-usage-memo-once.out.log"
 LOG_ERR="/tmp/codex-tools-usage-memo-once.err.log"
+
+if [ -z "$NPM_BIN" ]; then
+  echo "npm command not found. Set NPM_BIN."
+  exit 1
+fi
+
+LAUNCH_CMD="cd \"$ROOT_DIR\" && export GOOGLE_APPLICATION_CREDENTIALS=\"$CREDENTIALS\" && \"$NPM_BIN\" run usage:memo-trigger:fire"
+LAUNCH_CMD_XML="$(printf '%s' "$LAUNCH_CMD" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
 
 python3 - "$TRIGGER_ISO" > /tmp/codex-tools-usage-memo-once.time <<'PY'
 import sys
@@ -43,7 +57,7 @@ cat > "$PLIST_PATH" <<PLIST
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>cd /Documents/develop/codex-tools &amp;&amp; export GOOGLE_APPLICATION_CREDENTIALS=/.config/gcp/codex-tools-firestore-sa.json &amp;&amp; /opt/homebrew/bin/npm run usage:memo-trigger:fire</string>
+    <string>$LAUNCH_CMD_XML</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -53,7 +67,7 @@ cat > "$PLIST_PATH" <<PLIST
     <string>$HOME</string>
   </dict>
   <key>WorkingDirectory</key>
-  <string>/Documents/develop/codex-tools</string>
+  <string>$ROOT_DIR</string>
   <key>StartCalendarInterval</key>
   <dict>
     <key>Month</key><integer>$MONTH</integer>
