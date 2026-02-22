@@ -23,6 +23,9 @@ Usage:
 Defaults:
   --title: 本文から自動要約（未指定時）
   --project: 現在ディレクトリ名
+
+Validation:
+  --kind handover: body must include "## The story so far…" section
 `);
 }
 
@@ -66,6 +69,19 @@ function pickAutoTitleFromBody(body) {
   return trimTitle(body);
 }
 
+function hasStorySoFarSection(body) {
+  const text = String(body || "");
+  return /(^|\n)\s{0,3}#{1,6}\s*The story so far(?:…|\.{3})\s*($|\n)/i.test(text);
+}
+
+function validateHandoverBody(body) {
+  if (!hasStorySoFarSection(body)) {
+    throw new Error(
+      'Invalid handover body: include a "## The story so far…" section before saving.'
+    );
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -83,6 +99,10 @@ async function main() {
     console.error("Missing required argument: --body");
     usage();
     process.exit(1);
+  }
+
+  if (args.kind === "handover") {
+    validateHandoverBody(args.body);
   }
 
   const projectName = args.project || process.env.CODEX_PROJECT_NAME || path.basename(process.cwd());

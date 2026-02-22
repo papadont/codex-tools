@@ -978,8 +978,8 @@ function renderList() {
 
   const left = document.createElement("div");
   left.className = "rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1";
-  left.addEventListener("click", (ev) => {
-    if (!ev.shiftKey) return;
+  left.title = "Double-click to open Firebase usage";
+  left.addEventListener("dblclick", (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
     window.open(FIREBASE_USAGE_PAGE_URL, "_blank", "noopener,noreferrer");
@@ -1030,8 +1030,8 @@ function renderList() {
 
   const right = document.createElement("div");
   right.className = "rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1";
-  right.addEventListener("click", (ev) => {
-    if (!ev.shiftKey) return;
+  right.title = "Double-click to open Codex usage";
+  right.addEventListener("dblclick", (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
     window.open(CODEX_USAGE_PAGE_URL, "_blank", "noopener,noreferrer");
@@ -1044,7 +1044,7 @@ function renderList() {
   const codexBadge = document.createElement("span");
   codexBadge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
   applyPressureBadgeBorder(codexBadge, 100 - Number(codexSecondary?.remainingPercent || 0));
-  codexBadge.textContent = state.codexUsageSummary ? `${formatPercent(codexSecondary?.remainingPercent, 0)}` : "-";
+  codexBadge.textContent = state.codexUsageSummary ? `${formatPercent(codexSecondary?.usedPercent, 0)}` : "-";
   rightTop.appendChild(rightTitle);
   rightTop.appendChild(codexBadge);
   const codexBars = document.createElement("div");
