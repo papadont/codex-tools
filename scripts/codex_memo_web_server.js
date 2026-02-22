@@ -531,6 +531,14 @@ async function main() {
         });
       }
 
+      memos.sort((a, b) => {
+        const pinDiff = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
+        if (pinDiff !== 0) return pinDiff;
+        const ta = new Date(a.updatedAtISO || a.datetimeISO || a.createdAtISO || 0).getTime();
+        const tb = new Date(b.updatedAtISO || b.datetimeISO || b.createdAtISO || 0).getTime();
+        return tb - ta;
+      });
+
       const payload = { items: memos };
       if (!noCache) {
         setCache(cacheKey, payload);

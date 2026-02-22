@@ -777,8 +777,8 @@ function sortMemosForList(items) {
   return [...items].sort((a, b) => {
     const pinDiff = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
     if (pinDiff !== 0) return pinDiff;
-    const ta = new Date(a.datetimeISO || a.createdAtISO || 0).getTime();
-    const tb = new Date(b.datetimeISO || b.createdAtISO || 0).getTime();
+    const ta = new Date(a.updatedAtISO || a.datetimeISO || a.createdAtISO || 0).getTime();
+    const tb = new Date(b.updatedAtISO || b.datetimeISO || b.createdAtISO || 0).getTime();
     return tb - ta;
   });
 }
@@ -1111,15 +1111,34 @@ function renderList() {
   usageTop.appendChild(usageLabel);
   if (state.usageTileCollapsed) {
     const collapsedSummary = document.createElement("div");
-    collapsedSummary.className = "mx-2 flex min-w-0 flex-1 items-center gap-5 text-[11px] leading-4 text-[#e5e7eb]";
-    const fsLine = document.createElement("span");
-    fsLine.className = "min-w-0 shrink truncate";
-    fsLine.textContent = fsSummaryText;
-    const codexLine = document.createElement("span");
-    codexLine.className = "min-w-0 shrink truncate";
-    codexLine.textContent = codexSummaryText;
-    collapsedSummary.appendChild(fsLine);
-    collapsedSummary.appendChild(codexLine);
+    collapsedSummary.className = "mx-2 grid min-w-0 flex-1 grid-cols-2 items-center justify-items-center gap-2 text-[11px] leading-4 text-[#e5e7eb]";
+
+    const fsWrap = document.createElement("span");
+    fsWrap.className = "inline-flex min-w-0 items-center justify-center gap-1";
+    const fsLabel = document.createElement("span");
+    fsLabel.className = "text-[11px] font-bold tracking-wide text-[#e5e7eb]";
+    fsLabel.textContent = "Firebase";
+    const fsCollapsedBadge = document.createElement("span");
+    fsCollapsedBadge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
+    applyPressureBadgeBorder(fsCollapsedBadge, fsPeak);
+    fsCollapsedBadge.textContent = state.usageSummary ? `${fsPeak.toFixed(1)}%` : "-";
+    fsWrap.appendChild(fsLabel);
+    fsWrap.appendChild(fsCollapsedBadge);
+
+    const codexWrap = document.createElement("span");
+    codexWrap.className = "inline-flex min-w-0 items-center justify-center gap-1";
+    const codexLabel = document.createElement("span");
+    codexLabel.className = "text-[11px] font-bold tracking-wide text-[#e5e7eb]";
+    codexLabel.textContent = "code";
+    const codexCollapsedBadge = document.createElement("span");
+    codexCollapsedBadge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
+    applyPressureBadgeBorder(codexCollapsedBadge, 100 - Number(codexSecondary?.remainingPercent || 0));
+    codexCollapsedBadge.textContent = state.codexUsageSummary ? `${formatPercent(codexSecondary?.usedPercent, 0)}` : "-";
+    codexWrap.appendChild(codexLabel);
+    codexWrap.appendChild(codexCollapsedBadge);
+
+    collapsedSummary.appendChild(fsWrap);
+    collapsedSummary.appendChild(codexWrap);
     usageTop.appendChild(collapsedSummary);
   }
   usageTop.appendChild(collapseIcon);
@@ -1186,7 +1205,7 @@ function renderList() {
     metaText.textContent = `${item.projectName}`;
     const dateText = document.createElement("small");
     dateText.className = "shrink-0 whitespace-nowrap text-[9px] leading-3.5 text-[#7f8aa3]";
-    dateText.textContent = formatDate(item.datetimeISO || item.createdAtISO);
+    dateText.textContent = formatDate(item.updatedAtISO || item.datetimeISO || item.createdAtISO);
     meta.appendChild(typeBadge);
     meta.appendChild(metaText);
     meta.appendChild(dateText);
