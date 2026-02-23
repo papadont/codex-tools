@@ -793,7 +793,7 @@ function applyMarkdownPreviewPresentation(root) {
     n.style.width = "100%";
     n.style.borderCollapse = "collapse";
     n.style.margin = "0.95em 0";
-    n.style.fontSize = "0.95em";
+    n.style.fontSize = "0.96em";
   });
   root.querySelectorAll("th,td").forEach((n) => {
     n.style.border = "1px solid #cbd5e1";
@@ -808,9 +808,9 @@ function applyMarkdownPreviewPresentation(root) {
   root.querySelectorAll("blockquote").forEach((n) => {
     n.style.margin = "0.95em 0";
     n.style.padding = "0.45em 0 0.45em 0.8em";
-    n.style.borderLeft = "3px solid #94a3b8";
-    n.style.background = "#f8fafc";
-    n.style.color = "#475569";
+    n.style.borderLeft = "3px solid #cfc8bf";
+    n.style.background = "#f3f1ec";
+    n.style.color = "#5f5950";
   });
   root.querySelectorAll("pre").forEach((n) => {
     n.style.margin = "0.95em 0";
@@ -835,12 +835,16 @@ function applyMarkdownPreviewPresentation(root) {
     n.style.marginTop = "0.9em";
   });
   root.querySelectorAll("code").forEach((n) => {
-    n.style.background = "#e5e7eb";
+    n.style.background = "#454c57";
+    n.style.color = "#f6f2eb";
+    n.style.fontSize = "0.96em";
     n.style.borderRadius = "4px";
     n.style.padding = "0 4px";
   });
   root.querySelectorAll("pre").forEach((n) => {
-    n.style.background = "#e5e7eb";
+    n.style.background = "#454c57";
+    n.style.color = "#f6f2eb";
+    n.style.fontSize = "0.95em";
     n.style.borderRadius = "8px";
     n.style.padding = "8px";
     n.style.overflowX = "hidden";
@@ -852,6 +856,7 @@ function applyMarkdownPreviewPresentation(root) {
   });
   root.querySelectorAll("pre code").forEach((n) => {
     n.style.background = "transparent";
+    n.style.color = "inherit";
     n.style.padding = "0";
     n.style.borderRadius = "0";
     n.style.whiteSpace = "inherit";
