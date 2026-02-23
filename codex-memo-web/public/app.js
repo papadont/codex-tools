@@ -835,14 +835,15 @@ function applyMarkdownPreviewPresentation(root) {
     n.style.marginTop = "0.9em";
   });
   root.querySelectorAll("code").forEach((n) => {
-    n.style.background = "#454c57";
-    n.style.color = "#f6f2eb";
+    n.style.background = "#5b6572";
+    n.style.color = "#fbf8f2";
     n.style.fontSize = "0.96em";
     n.style.borderRadius = "4px";
+    n.style.border = "1px solid #707b88";
     n.style.padding = "0 4px";
   });
   root.querySelectorAll("pre").forEach((n) => {
-    n.style.background = "#454c57";
+    n.style.background = "#505864";
     n.style.color = "#f6f2eb";
     n.style.fontSize = "0.95em";
     n.style.borderRadius = "8px";
@@ -857,6 +858,7 @@ function applyMarkdownPreviewPresentation(root) {
   root.querySelectorAll("pre code").forEach((n) => {
     n.style.background = "transparent";
     n.style.color = "inherit";
+    n.style.border = "0";
     n.style.padding = "0";
     n.style.borderRadius = "0";
     n.style.whiteSpace = "inherit";
