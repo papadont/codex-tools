@@ -808,9 +808,14 @@ function applyMarkdownPreviewPresentation(root) {
   root.querySelectorAll("blockquote").forEach((n) => {
     n.style.margin = "0.95em 0";
     n.style.padding = "0.45em 0 0.45em 0.8em";
-    n.style.borderLeft = "3px solid #cfc8bf";
-    n.style.background = "#f3f1ec";
+    n.style.borderLeft = "0";
+    n.style.backgroundColor = "#f3f1ec";
+    n.style.backgroundImage = "linear-gradient(#cfc8bf, #cfc8bf)";
+    n.style.backgroundRepeat = "no-repeat";
+    n.style.backgroundSize = "4px calc(100% - 22px)";
+    n.style.backgroundPosition = "left 4px top 11px";
     n.style.color = "#5f5950";
+    n.style.borderRadius = "8px";
   });
   root.querySelectorAll("pre").forEach((n) => {
     n.style.margin = "0.95em 0";
