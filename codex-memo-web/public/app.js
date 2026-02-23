@@ -607,10 +607,58 @@ function markdownToHtml(source) {
   let html = "";
   const markedLib = window.marked;
   if (markedLib) {
-    if (typeof markedLib.parse === "function") {
-      html = markedLib.parse(source, { gfm: true, breaks: true });
+    const parseOptions = { gfm: true, breaks: true };
+    if (
+      typeof markedLib.parse === "function" &&
+      typeof markedLib.lexer === "function" &&
+      typeof markedLib.parser === "function" &&
+      typeof markedLib.Renderer === "function"
+    ) {
+      const annotateListMarkers = (tokens) => {
+        if (!Array.isArray(tokens)) return;
+        tokens.forEach((token) => {
+          if (!token || typeof token !== "object") return;
+          if (token.type === "list" && !token.ordered) {
+            const firstItem = Array.isArray(token.items) ? token.items[0] : null;
+            const itemRaw = String(firstItem?.raw || "");
+            const tokenRaw = String(token.raw || "");
+            const marker =
+              String(firstItem?.bullet || "") ||
+              itemRaw.match(/^\s*([*+-])\s/m)?.[1] ||
+              tokenRaw.match(/^\s*([*+-])\s/m)?.[1] ||
+              "";
+            if (marker) token._codexListMarker = marker;
+          }
+          if (Array.isArray(token.tokens)) annotateListMarkers(token.tokens);
+          if (Array.isArray(token.items)) {
+            token.items.forEach((item) => {
+              if (Array.isArray(item?.tokens)) annotateListMarkers(item.tokens);
+            });
+          }
+        });
+      };
+
+      const tokens = markedLib.lexer(source || "", parseOptions);
+      annotateListMarkers(tokens);
+
+      const renderer = new markedLib.Renderer();
+      if (typeof renderer.list === "function") {
+        const baseList = renderer.list.bind(renderer);
+        renderer.list = function listWithMarkerClass(token, ...rest) {
+          const rendered = baseList(token, ...rest);
+          if (!token || token.ordered || typeof rendered !== "string") return rendered;
+          const marker = String(token._codexListMarker || "");
+          const cls = marker === "-" ? "md-list-dash" : marker === "*" ? "md-list-bullet" : "";
+          if (!cls) return rendered;
+          return rendered.replace(/^<ul>/, `<ul class="${cls}">`);
+        };
+      }
+
+      html = markedLib.parser(tokens, { ...parseOptions, renderer });
+    } else if (typeof markedLib.parse === "function") {
+      html = markedLib.parse(source, parseOptions);
     } else if (typeof markedLib === "function") {
-      html = markedLib(source, { gfm: true, breaks: true });
+      html = markedLib(source, parseOptions);
     }
   } else {
     html = `<pre>${escapeHtml(source)}</pre>`;
@@ -632,15 +680,76 @@ function applyMarkdownPreviewPresentation(root) {
 
   root.querySelectorAll("h1,h2,h3").forEach((n) => {
     n.style.fontWeight = "700";
-    n.style.margin = "0.35em 0";
+    n.style.margin = "0.5em 0 0.35em";
   });
   root.querySelectorAll("h1").forEach((n) => { n.style.fontSize = "1.2em"; });
   root.querySelectorAll("h2").forEach((n) => { n.style.fontSize = "1.1em"; });
   root.querySelectorAll("h3").forEach((n) => { n.style.fontSize = "1.0em"; });
-  root.querySelectorAll("p").forEach((n) => { n.style.margin = "0.25em 0"; });
+  root.querySelectorAll("p + h1, p + h2, p + h3, ul + h1, ul + h2, ul + h3, ol + h1, ol + h2, ol + h3, table + h1, table + h2, table + h3, blockquote + h1, blockquote + h2, blockquote + h3, pre + h1, pre + h2, pre + h3").forEach((n) => {
+    n.style.marginTop = "1.25em";
+  });
+  root.querySelectorAll("p").forEach((n) => { n.style.margin = "0.4em 0"; });
   root.querySelectorAll("ul,ol").forEach((n) => {
-    n.style.margin = "0.25em 0";
+    n.style.margin = "0.7em 0";
     n.style.paddingLeft = "1.25em";
+  });
+  root.querySelectorAll("ul").forEach((n) => {
+    n.style.listStyleType = "disc";
+  });
+  root.querySelectorAll("ul.md-list-dash").forEach((n) => {
+    n.style.listStyleType = "none";
+    n.style.paddingLeft = "0";
+  });
+  root.querySelectorAll("ol").forEach((n) => {
+    n.style.listStyleType = "decimal";
+  });
+  root.querySelectorAll("li").forEach((n) => {
+    n.style.display = "list-item";
+    n.style.margin = "0.22em 0";
+  });
+  root.querySelectorAll("ul.md-list-dash > li").forEach((n) => {
+    n.classList.add("md-dash-list-item");
+  });
+  root.querySelectorAll("table").forEach((n) => {
+    n.style.width = "100%";
+    n.style.borderCollapse = "collapse";
+    n.style.margin = "0.95em 0";
+    n.style.fontSize = "0.95em";
+  });
+  root.querySelectorAll("th,td").forEach((n) => {
+    n.style.border = "1px solid #cbd5e1";
+    n.style.padding = "4px 8px";
+    n.style.verticalAlign = "top";
+    n.style.textAlign = "left";
+  });
+  root.querySelectorAll("th").forEach((n) => {
+    n.style.background = "#f3f4f6";
+    n.style.fontWeight = "600";
+  });
+  root.querySelectorAll("blockquote").forEach((n) => {
+    n.style.margin = "0.95em 0";
+    n.style.padding = "0.45em 0 0.45em 0.8em";
+    n.style.borderLeft = "3px solid #94a3b8";
+    n.style.background = "#f8fafc";
+    n.style.color = "#475569";
+  });
+  root.querySelectorAll("pre").forEach((n) => {
+    n.style.margin = "0.95em 0";
+  });
+  root.querySelectorAll("p + p").forEach((n) => {
+    n.style.marginTop = "0.9em";
+  });
+  root.querySelectorAll("p + ul, p + ol, p + table, p + blockquote, p + pre").forEach((n) => {
+    n.style.marginTop = "1.05em";
+  });
+  root.querySelectorAll("ul + ul, ul + ol, ol + ul, ol + ol").forEach((n) => {
+    n.style.marginTop = "1.4em";
+  });
+  root.querySelectorAll("table + p, blockquote + p, pre + p").forEach((n) => {
+    n.style.marginTop = "1.05em";
+  });
+  root.querySelectorAll("table + ul, table + ol, blockquote + ul, blockquote + ol, pre + ul, pre + ol").forEach((n) => {
+    n.style.marginTop = "1.35em";
   });
   // Keep one visible blank-line feel before closing messages after bullet lists.
   root.querySelectorAll("ul + p, ol + p").forEach((n) => {
@@ -655,7 +764,20 @@ function applyMarkdownPreviewPresentation(root) {
     n.style.background = "#e5e7eb";
     n.style.borderRadius = "8px";
     n.style.padding = "8px";
-    n.style.overflow = "auto";
+    n.style.overflowX = "hidden";
+    n.style.overflowY = "auto";
+    n.style.whiteSpace = "pre-wrap";
+    n.style.wordBreak = "break-word";
+    n.style.overflowWrap = "anywhere";
+    n.style.lineHeight = "1.45";
+  });
+  root.querySelectorAll("pre code").forEach((n) => {
+    n.style.background = "transparent";
+    n.style.padding = "0";
+    n.style.borderRadius = "0";
+    n.style.whiteSpace = "inherit";
+    n.style.wordBreak = "inherit";
+    n.style.overflowWrap = "inherit";
   });
 }
 
