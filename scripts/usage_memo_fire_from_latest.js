@@ -95,8 +95,7 @@ function buildUsageOverviewBody(firestoreSummary, codexSummary) {
     .slice(0, 14);
 
   const lines = [
-    `- fetched: ${formatDate(fetchedAtISO)}`,
-    "",
+    `<small>fetched: ${formatDate(fetchedAtISO)}</small>`,
     "## Codex",
     "",
     `- 5h remaining: ${boldPercent(codexPrimary?.remainingPercent, 0)} reset: ${formatDate(codexPrimary?.resetAtISO)}`,

@@ -12,7 +12,9 @@ const state = {
   codexUsageFetchedAtISO: "",
   usageSummary: null,
   usageError: "",
-  usageFetchedAtISO: ""
+  usageFetchedAtISO: "",
+  pointerClientX: 0,
+  pointerClientY: 0
 };
 
 const USAGE_OVERVIEW_PANEL_ID = "__usage_overview__";
@@ -54,8 +56,12 @@ const el = {
   downloadBtn: document.getElementById("downloadBtn"),
   copyBodyBtn: document.getElementById("copyBodyBtn"),
   shareBtn: document.getElementById("shareBtn"),
+  summaryBtn: document.getElementById("summaryBtn"),
   status: document.getElementById("status")
 };
+
+let summaryTooltipEl = null;
+let summaryRequestSeq = 0;
 
 async function request(path, options) {
   const res = await fetch(path, options);
@@ -85,6 +91,75 @@ function setStatus(message, isError = false, tone = "default") {
     return;
   }
   el.status.classList.add("text-[#5d79a8]");
+}
+
+function ensureSummaryTooltip() {
+  if (summaryTooltipEl && summaryTooltipEl.isConnected) return summaryTooltipEl;
+  const tip = document.createElement("div");
+  tip.id = "summaryTooltip";
+  tip.className = "fixed z-[120] hidden max-w-[min(420px,calc(100vw-24px))] rounded-xl border border-[#4b5563] bg-[#4b5563] px-3 py-2 shadow-sm";
+  tip.style.pointerEvents = "none";
+  tip.style.whiteSpace = "pre-wrap";
+  tip.style.lineHeight = "1.45";
+  tip.style.color = "#e5e7eb";
+  tip.style.fontSize = "12px";
+  tip.style.boxShadow = "0 1px 2px rgba(15, 23, 42, 0.18)";
+
+  const head = document.createElement("div");
+  head.className = "mb-1 text-[10px] font-semibold tracking-wide text-[#cbd5e1]";
+  head.dataset.role = "head";
+
+  const body = document.createElement("div");
+  body.className = "text-[12px]";
+  body.dataset.role = "body";
+
+  tip.appendChild(head);
+  tip.appendChild(body);
+  document.body.appendChild(tip);
+  summaryTooltipEl = tip;
+  return tip;
+}
+
+function positionSummaryTooltip(x, y) {
+  const tip = ensureSummaryTooltip();
+  const pad = 14;
+  const vw = window.innerWidth || document.documentElement.clientWidth || 1200;
+  const vh = window.innerHeight || document.documentElement.clientHeight || 800;
+  tip.classList.remove("hidden");
+  const rect = tip.getBoundingClientRect();
+  let left = Number(x || 0) + 14;
+  let top = Number(y || 0) + 16;
+  if (left + rect.width + pad > vw) left = Math.max(pad, vw - rect.width - pad);
+  if (top + rect.height + pad > vh) top = Math.max(pad, Number(y || 0) - rect.height - 12);
+  tip.style.left = `${Math.max(pad, left)}px`;
+  tip.style.top = `${Math.max(pad, top)}px`;
+}
+
+function showSummaryTooltip({ head, body, isError = false, followPointer = true }) {
+  const tip = ensureSummaryTooltip();
+  const headEl = tip.querySelector('[data-role="head"]');
+  const bodyEl = tip.querySelector('[data-role="body"]');
+  if (headEl) headEl.textContent = head || "summary";
+  if (bodyEl) bodyEl.textContent = body || "";
+  tip.dataset.followPointer = followPointer ? "1" : "0";
+  tip.style.borderColor = isError ? "#cf7896" : "#4b5563";
+  tip.style.background = "#4b5563";
+  tip.classList.remove("hidden");
+  positionSummaryTooltip(state.pointerClientX || 0, state.pointerClientY || 0);
+}
+
+function hideSummaryTooltip() {
+  if (!summaryTooltipEl) return;
+  summaryTooltipEl.classList.add("hidden");
+}
+
+function rememberPointerPosition(ev) {
+  if (!ev) return;
+  if (Number.isFinite(ev.clientX)) state.pointerClientX = ev.clientX;
+  if (Number.isFinite(ev.clientY)) state.pointerClientY = ev.clientY;
+  if (summaryTooltipEl && !summaryTooltipEl.classList.contains("hidden") && summaryTooltipEl.dataset.followPointer === "1") {
+    positionSummaryTooltip(state.pointerClientX, state.pointerClientY);
+  }
 }
 
 function formatDate(value) {
@@ -202,8 +277,7 @@ function buildUsageOverviewBody() {
     .slice(0, 14);
 
   const lines = [
-    `- fetched: ${formatDate(fetchedAtISO)}`,
-    "",
+    `<small>fetched: ${formatDate(fetchedAtISO)}</small>`,
     "## Codex",
     "",
     state.codexUsageSummary
@@ -685,6 +759,11 @@ function applyMarkdownPreviewPresentation(root) {
   root.querySelectorAll("h1").forEach((n) => { n.style.fontSize = "1.2em"; });
   root.querySelectorAll("h2").forEach((n) => { n.style.fontSize = "1.1em"; });
   root.querySelectorAll("h3").forEach((n) => { n.style.fontSize = "1.0em"; });
+  root.querySelectorAll("small").forEach((n) => {
+    n.style.fontSize = "0.85em";
+    n.style.color = "#64748b";
+    n.style.lineHeight = "1.25";
+  });
   root.querySelectorAll("p + h1, p + h2, p + h3, ul + h1, ul + h2, ul + h3, ol + h1, ol + h2, ol + h3, table + h1, table + h2, table + h3, blockquote + h1, blockquote + h2, blockquote + h3, pre + h1, pre + h2, pre + h3").forEach((n) => {
     n.style.marginTop = "1.25em";
   });
@@ -1238,7 +1317,7 @@ function renderList() {
     const fsWrap = document.createElement("span");
     fsWrap.className = "inline-flex min-w-0 items-center justify-center gap-1";
     const fsLabel = document.createElement("span");
-    fsLabel.className = "text-[11px] font-bold tracking-wide text-[#e5e7eb]";
+    fsLabel.className = "text-[12px] font-bold tracking-wide text-[#e5e7eb]";
     fsLabel.textContent = "Firebase";
     const fsCollapsedBadge = document.createElement("span");
     fsCollapsedBadge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
@@ -1250,8 +1329,8 @@ function renderList() {
     const codexWrap = document.createElement("span");
     codexWrap.className = "inline-flex min-w-0 items-center justify-center gap-1";
     const codexLabel = document.createElement("span");
-    codexLabel.className = "text-[11px] font-bold tracking-wide text-[#e5e7eb]";
-    codexLabel.textContent = "code";
+    codexLabel.className = "text-[12px] font-bold tracking-wide text-[#e5e7eb]";
+    codexLabel.textContent = "Codex";
     const codexCollapsedBadge = document.createElement("span");
     codexCollapsedBadge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
     applyPressureBadgeBorder(codexCollapsedBadge, 100 - Number(codexSecondary?.remainingPercent || 0));
@@ -1958,6 +2037,56 @@ async function shareMemo() {
   }
 }
 
+async function summarizeMemoAtPointer(ev) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  rememberPointerPosition(ev);
+
+  const memo = currentMemoForExport();
+  const source = String(memo.memoBody || "").trim();
+  if (!source) {
+    hideSummaryTooltip();
+    setStatus("Summary skipped: body is empty", true);
+    return;
+  }
+
+  const reqId = ++summaryRequestSeq;
+  showSummaryTooltip({
+    head: "summary (gpt-4.1-nano)",
+    body: "要約中...",
+    isError: false,
+    followPointer: true
+  });
+
+  try {
+    const res = await request("/api/summarize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        threadTitle: memo.threadTitle || "",
+        memoBody: source
+      })
+    });
+    if (reqId !== summaryRequestSeq) return;
+    showSummaryTooltip({
+      head: `summary (${res.model || "gpt-4.1-nano"})`,
+      body: String(res.summary || "").trim() || "(empty)",
+      isError: false,
+      followPointer: true
+    });
+    setStatus("Summary ready");
+  } catch (error) {
+    if (reqId !== summaryRequestSeq) return;
+    showSummaryTooltip({
+      head: "summary error",
+      body: String(error.message || error || "Failed to summarize"),
+      isError: true,
+      followPointer: true
+    });
+    setStatus(`Summary error: ${error.message || error}`, true);
+  }
+}
+
 async function copyBodyText() {
   try {
     await navigator.clipboard.writeText(el.memoBodyInput.value || "");
@@ -1968,6 +2097,18 @@ async function copyBodyText() {
 }
 
 function initEvents() {
+  document.addEventListener("mousemove", rememberPointerPosition, { passive: true });
+  document.addEventListener("click", (ev) => {
+    const target = ev.target;
+    if (target && target.closest && (target.closest("#summaryBtn") || target.closest("#summaryTooltip"))) {
+      return;
+    }
+    hideSummaryTooltip();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") hideSummaryTooltip();
+  });
+
   el.newBtn.addEventListener("click", () => {
     setBodyMode("text");
     fillEditor({
@@ -2056,6 +2197,7 @@ function initEvents() {
   el.downloadBtn.addEventListener("click", () => downloadMemo(el.downloadFormatSelect.value || "txt"));
   el.copyBodyBtn.addEventListener("click", copyBodyText);
   el.shareBtn.addEventListener("click", shareMemo);
+  el.summaryBtn.addEventListener("click", summarizeMemoAtPointer);
 }
 
 initEvents();

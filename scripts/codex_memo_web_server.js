@@ -14,6 +14,7 @@ const CACHE_TTL_MS = Number(process.env.MEMO_CACHE_TTL_MS || 15_000);
 const USAGE_CACHE_TTL_MS = Number(process.env.USAGE_CACHE_TTL_MS || 180_000);
 const CODEX_USAGE_CACHE_TTL_MS = Number(process.env.CODEX_USAGE_CACHE_TTL_MS || 30_000);
 const CODEX_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
+const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 
 const USAGE_METRIC_CANDIDATES = {
   read: [
@@ -479,6 +480,83 @@ function openPathWithDefaultApp(targetPath) {
   child.unref();
 }
 
+function extractOpenAIResponseText(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  if (typeof payload.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  const chunks = [];
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const part of content) {
+      const text = typeof part?.text === "string" ? part.text : "";
+      if (text) chunks.push(text);
+    }
+  }
+  return chunks.join("\n").trim();
+}
+
+async function summarizeMemoWithOpenAI({ threadTitle, memoBody }) {
+  const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is not set.");
+  }
+  const title = String(threadTitle || "").trim();
+  const body = String(memoBody || "").trim();
+  if (!body) throw new Error("memoBody is required.");
+  const clipped = body.slice(0, 20000);
+
+  const input = [
+    {
+      role: "system",
+      content: [
+        {
+          type: "input_text",
+          text: "You summarize memo text in Japanese. Be concise, concrete, and readable. Output 3-6 lines max. No preamble."
+        }
+      ]
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: [
+            title ? `Thread: ${title}` : "",
+            "Memo body:",
+            clipped
+          ].filter(Boolean).join("\n\n")
+        }
+      ]
+    }
+  ];
+
+  const res = await fetch(OPENAI_RESPONSES_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: "gpt-4.1-nano",
+      input,
+      max_output_tokens: 220
+    })
+  });
+
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = payload?.error?.message || `OpenAI API error (${res.status})`;
+    throw new Error(message);
+  }
+  const summary = extractOpenAIResponseText(payload);
+  if (!summary) {
+    throw new Error("OpenAI response did not contain summary text.");
+  }
+  return { summary, model: "gpt-4.1-nano" };
+}
+
 async function main() {
   const db = initFirestore();
   const app = express();
@@ -794,6 +872,23 @@ async function main() {
       res.json({ ok: true, path: requestedPath, openedPath: targetPath });
     } catch (error) {
       res.status(400).json({ error: error.message || "Failed to open local file." });
+    }
+  });
+
+  app.post("/api/summarize", async (req, res) => {
+    try {
+      const memoBody = String(req.body?.memoBody || "").trim();
+      const threadTitle = String(req.body?.threadTitle || "").trim();
+      if (!memoBody) {
+        res.status(400).json({ error: "memoBody is required." });
+        return;
+      }
+      const result = await summarizeMemoWithOpenAI({ threadTitle, memoBody });
+      res.json(result);
+    } catch (error) {
+      const message = error.message || "Failed to summarize memo.";
+      const code = String(message).includes("OPENAI_API_KEY") ? 503 : 500;
+      res.status(code).json({ error: message });
     }
   });
 

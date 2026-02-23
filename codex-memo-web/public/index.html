@@ -113,7 +113,15 @@
                 <option value="json">json</option>
                 </select>
                 <button id="downloadBtn" tabindex="-1" type="button" class="h-7 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">download</button>
-                <button id="shareBtn" tabindex="-1" type="button" class="h-7 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">share</button>
+                <button id="shareBtn" tabindex="-1" type="button" aria-label="Share" title="Share" class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#d4d8e0] bg-[#fefdfb] p-0 hover:border-[#7f90b0]">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" class="h-5 w-5 fill-none stroke-[#6e7d99]" stroke-width="1.9">
+                    <path d="M12 16V5"></path>
+                    <path d="M8.5 8.5 12 5l3.5 3.5"></path>
+                    <path d="M6 13.5v3a1.5 1.5 0 0 0 1.5 1.5h9a1.5 1.5 0 0 0 1.5-1.5v-3"></path>
+                  </svg>
+                </button>
+                <span aria-hidden="true" class="inline-block w-12"></span>
+                <button id="summaryBtn" tabindex="-1" type="button" aria-label="AI summary" class="h-7 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">AI</button>
               </div>
             </div>
           </div>
@@ -130,7 +138,6 @@
               </svg>
             </button>
           </div>
-
           <div class="relative mt-0.5 flex min-h-0 flex-1 flex-col">
             <div class="absolute right-3 top-1 z-10 flex items-center gap-2">
               <button id="copyBodyBtn" tabindex="-1" type="button" aria-label="Copy body" class="h-7 w-7 rounded-md bg-[#fefdfb] p-1 hover:brightness-95">
@@ -149,6 +156,6 @@
       </main>
     </div>
 
-    <script src="/app.js?v=20260221-03"></script>
+    <script src="/app.js?v=20260223-03"></script>
   </body>
 </html>
