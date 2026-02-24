@@ -2,10 +2,67 @@
 
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const { spawn } = require("child_process");
 const express = require("express");
 const admin = require("firebase-admin");
 const { GoogleAuth } = require("google-auth-library");
+
+function stripMatchingQuotes(value) {
+  if (value.length >= 2) {
+    const first = value[0];
+    const last = value[value.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return value.slice(1, -1);
+    }
+  }
+  return value;
+}
+
+function loadEnvFile(filePath) {
+  let raw;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return false;
+  }
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const normalized = trimmed.startsWith("export ") ? trimmed.slice(7).trim() : trimmed;
+    const eqIndex = normalized.indexOf("=");
+    if (eqIndex <= 0) continue;
+
+    const key = normalized.slice(0, eqIndex).trim();
+    if (!key || process.env[key] !== undefined) continue;
+
+    let value = normalized.slice(eqIndex + 1).trim();
+    const hashIndex = value.indexOf(" #");
+    if (hashIndex >= 0) value = value.slice(0, hashIndex).trim();
+    process.env[key] = stripMatchingQuotes(value);
+  }
+
+  return true;
+}
+
+function loadEnvFromCandidates() {
+  const envCandidates = [
+    path.join(process.cwd(), ".env"),
+    path.join(os.homedir(), ".config", "codex-tools", ".env"),
+    path.join(os.homedir(), ".codex-tools.env")
+  ];
+
+  for (const filePath of envCandidates) {
+    if (fs.existsSync(filePath) && loadEnvFile(filePath)) {
+      return filePath;
+    }
+  }
+  return "";
+}
+
+loadEnvFromCandidates();
 
 const PORT = Number(process.env.PORT || 4173);
 const COLLECTION = "codex-memo";
@@ -497,6 +554,208 @@ function extractOpenAIResponseText(payload) {
   return chunks.join("\n").trim();
 }
 
+function getFirestoreTodaySnapshotFromSummary(firestoreSummary) {
+  const perDay = Array.isArray(firestoreSummary?.perDay) ? firestoreSummary.perDay : [];
+  const today = perDay[perDay.length - 1] || { read: 0, write: 0, delete: 0, ratePercent: {} };
+  const recent = perDay.slice(-14);
+  const limits = firestoreSummary?.limitsDaily || { read: 50000, write: 20000, delete: 20000 };
+  const ratePercent = {
+    read: Number(today?.ratePercent?.read ?? ((Number(today.read || 0) / Math.max(1, Number(limits.read || 1))) * 100)),
+    write: Number(today?.ratePercent?.write ?? ((Number(today.write || 0) / Math.max(1, Number(limits.write || 1))) * 100)),
+    delete: Number(today?.ratePercent?.delete ?? ((Number(today.delete || 0) / Math.max(1, Number(limits.delete || 1))) * 100))
+  };
+  const maxInRecent = {
+    read: Math.max(1, ...recent.map((d) => Number(d.read || 0))),
+    write: Math.max(1, ...recent.map((d) => Number(d.write || 0))),
+    delete: Math.max(1, ...recent.map((d) => Number(d.delete || 0)))
+  };
+  const relativePercent = {
+    read: (Number(today.read || 0) / Math.max(1, Number(maxInRecent.read || 1))) * 100,
+    write: (Number(today.write || 0) / Math.max(1, Number(maxInRecent.write || 1))) * 100,
+    delete: (Number(today.delete || 0) / Math.max(1, Number(maxInRecent.delete || 1))) * 100
+  };
+  return { ratePercent, relativePercent };
+}
+
+function computeFirestore14dTrendFromSummary(firestoreSummary) {
+  const perDay = Array.isArray(firestoreSummary?.perDay) ? firestoreSummary.perDay : [];
+  const last14 = perDay.slice(-14);
+  const first7 = last14.slice(0, 7);
+  const last7 = last14.slice(-7);
+  const sum = (rows, key) => rows.reduce((acc, row) => acc + Number(row?.[key] || 0), 0);
+  const avg = (rows, key) => (rows.length ? sum(rows, key) / rows.length : 0);
+  const latest = last14[last14.length - 1] || null;
+  const prev = last14[last14.length - 2] || null;
+  const avgRate = (rows, key) => {
+    if (!rows.length) return 0;
+    return rows.reduce((acc, row) => acc + Number(row?.ratePercent?.[key] || 0), 0) / rows.length;
+  };
+  const maxRate = (rows, key) => rows.reduce((m, row) => Math.max(m, Number(row?.ratePercent?.[key] || 0)), 0);
+  const trend = {};
+  for (const key of ["read", "write", "delete"]) {
+    const avgFirst7 = avg(first7, key);
+    const avgLast7 = avg(last7, key);
+    trend[key] = {
+      avgFirst7,
+      avgLast7,
+      deltaAvg: avgLast7 - avgFirst7,
+      deltaDay: Number(latest?.[key] || 0) - Number(prev?.[key] || 0),
+      latestRate: Number(latest?.ratePercent?.[key] || 0),
+      prevRate: Number(prev?.ratePercent?.[key] || 0),
+      deltaRateDay: Number(latest?.ratePercent?.[key] || 0) - Number(prev?.ratePercent?.[key] || 0),
+      avgRateFirst7: avgRate(first7, key),
+      avgRateLast7: avgRate(last7, key),
+      deltaAvgRate: avgRate(last7, key) - avgRate(first7, key),
+      maxRate14d: maxRate(last14, key)
+    };
+  }
+  return { latest, trend };
+}
+
+function buildCodexWeeklyTimingContext(codexSummary) {
+  const fetchedAtISO = codexSummary?.fetchedAtISO || new Date().toISOString();
+  const resetAtISO = codexSummary?.secondaryWindow?.resetAtISO || "";
+  const fetched = new Date(fetchedAtISO);
+  const reset = new Date(resetAtISO);
+  const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const fetchedMs = fetched.getTime();
+  const resetMs = reset.getTime();
+  const diffMs = Number.isFinite(fetchedMs) && Number.isFinite(resetMs) ? Math.max(0, resetMs - fetchedMs) : NaN;
+  const hours = Number.isFinite(diffMs) ? diffMs / (1000 * 60 * 60) : null;
+  const days = Number.isFinite(diffMs) ? diffMs / (1000 * 60 * 60 * 24) : null;
+  return {
+    fetchedAtISO,
+    currentWeekdayLocal: Number.isFinite(fetchedMs) ? weekdayNames[fetched.getDay()] : null,
+    weeklyResetAtISO: resetAtISO || null,
+    daysUntilWeeklyReset: Number.isFinite(days) ? Number(days.toFixed(2)) : null,
+    hoursUntilWeeklyReset: Number.isFinite(hours) ? Math.round(hours) : null
+  };
+}
+
+async function summarizeUsageOverviewWithOpenAI({ firestoreSummary, codexSummary }) {
+  const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not set.");
+  if (!firestoreSummary || !codexSummary) throw new Error("firestoreSummary and codexSummary are required.");
+
+  const fsToday = getFirestoreTodaySnapshotFromSummary(firestoreSummary);
+  const fsTrend = computeFirestore14dTrendFromSummary(firestoreSummary);
+  const codexPrimary = codexSummary?.primaryWindow || null;
+  const codexSecondary = codexSummary?.secondaryWindow || null;
+  const codexWeeklyTiming = buildCodexWeeklyTimingContext(codexSummary);
+  const limits = firestoreSummary?.limitsDaily || {};
+
+  const input = [
+    {
+      role: "system",
+      content: [
+        {
+          type: "input_text",
+          text: "日本語で簡潔に2-4行。Markdown引用(>)前提なので本文だけ返す。最優先は『制限枠に収まるか』(超過リスク/余裕)。Firebaseは日毎free-tier使用率(R/W/D)を最優先に、過去14日変化も日次使用率ベースで言及。生件数の today vs 14d max 比率は制限判定の主根拠にしない。Codexは1w remainingを主軸に使用率(used%)も書き、5h remaining/使用率にも触れる。加えてCodex 1wは週枠なので、現在の曜日と週次リセットまであと何日(何時間)かの視点で余裕/注意を述べる。FirebaseとCodexの比較観点として『使用率』を使う。"
+        }
+      ]
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: JSON.stringify({
+            firestore: {
+              focus: "free-tier usage rate",
+              latestDateUTC: fsTrend.latest?.date || null,
+              limitsDaily: {
+                read: Number(limits.read || 0),
+                write: Number(limits.write || 0),
+                delete: Number(limits.delete || 0)
+              },
+              todayRatePercentOfFreeTier: fsToday.ratePercent,
+              dailyRate14d: {
+                latest: {
+                  read: Number(fsTrend.trend.read.latestRate.toFixed(3)),
+                  write: Number(fsTrend.trend.write.latestRate.toFixed(3)),
+                  delete: Number(fsTrend.trend.delete.latestRate.toFixed(3))
+                },
+                latestVsPrevDelta: {
+                  read: Number(fsTrend.trend.read.deltaRateDay.toFixed(3)),
+                  write: Number(fsTrend.trend.write.deltaRateDay.toFixed(3)),
+                  delete: Number(fsTrend.trend.delete.deltaRateDay.toFixed(3))
+                },
+                avgFirst7: {
+                  read: Number(fsTrend.trend.read.avgRateFirst7.toFixed(3)),
+                  write: Number(fsTrend.trend.write.avgRateFirst7.toFixed(3)),
+                  delete: Number(fsTrend.trend.delete.avgRateFirst7.toFixed(3))
+                },
+                avgLast7: {
+                  read: Number(fsTrend.trend.read.avgRateLast7.toFixed(3)),
+                  write: Number(fsTrend.trend.write.avgRateLast7.toFixed(3)),
+                  delete: Number(fsTrend.trend.delete.avgRateLast7.toFixed(3))
+                },
+                avgDeltaLast7MinusFirst7: {
+                  read: Number(fsTrend.trend.read.deltaAvgRate.toFixed(3)),
+                  write: Number(fsTrend.trend.write.deltaAvgRate.toFixed(3)),
+                  delete: Number(fsTrend.trend.delete.deltaAvgRate.toFixed(3))
+                },
+                max14d: {
+                  read: Number(fsTrend.trend.read.maxRate14d.toFixed(3)),
+                  write: Number(fsTrend.trend.write.maxRate14d.toFixed(3)),
+                  delete: Number(fsTrend.trend.delete.maxRate14d.toFixed(3))
+                }
+              },
+              avgDeltaLast7MinusFirst7: {
+                read: Number(fsTrend.trend.read.deltaAvg.toFixed(2)),
+                write: Number(fsTrend.trend.write.deltaAvg.toFixed(2)),
+                delete: Number(fsTrend.trend.delete.deltaAvg.toFixed(2))
+              },
+              latestVsPrevDayDelta: {
+                read: fsTrend.trend.read.deltaDay,
+                write: fsTrend.trend.write.deltaDay,
+                delete: fsTrend.trend.delete.deltaDay
+              }
+            },
+            codex: {
+              focus: "usage rate aligned with firebase",
+              planType: codexSummary?.planType || null,
+              weeklyTiming: codexWeeklyTiming,
+              weekly: {
+                usedPercent: Number(codexSecondary?.usedPercent ?? 0),
+                remainingPercent: Number(codexSecondary?.remainingPercent ?? 0),
+                resetAtISO: codexSecondary?.resetAtISO || null
+              },
+              fiveHour: {
+                usedPercent: Number(codexPrimary?.usedPercent ?? 0),
+                remainingPercent: Number(codexPrimary?.remainingPercent ?? 0),
+                resetAtISO: codexPrimary?.resetAtISO || null
+              }
+            }
+          }, null, 2)
+        }
+      ]
+    }
+  ];
+
+  const res = await fetch(OPENAI_RESPONSES_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      input,
+      max_output_tokens: 220
+    })
+  });
+
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = payload?.error?.message || `OpenAI API error (${res.status})`;
+    throw new Error(message);
+  }
+  const summary = extractOpenAIResponseText(payload);
+  if (!summary) throw new Error("OpenAI response did not contain summary text.");
+  return { summary, model: "gpt-4o-mini" };
+}
+
 async function summarizeMemoWithOpenAI({ threadTitle, memoBody }) {
   const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
   if (!apiKey) {
@@ -887,6 +1146,23 @@ async function main() {
       res.json(result);
     } catch (error) {
       const message = error.message || "Failed to summarize memo.";
+      const code = String(message).includes("OPENAI_API_KEY") ? 503 : 500;
+      res.status(code).json({ error: message });
+    }
+  });
+
+  app.post("/api/usage/overview-summary", async (req, res) => {
+    try {
+      const firestoreSummary = req.body?.firestoreSummary || null;
+      const codexSummary = req.body?.codexSummary || null;
+      if (!firestoreSummary || !codexSummary) {
+        res.status(400).json({ error: "firestoreSummary and codexSummary are required." });
+        return;
+      }
+      const result = await summarizeUsageOverviewWithOpenAI({ firestoreSummary, codexSummary });
+      res.json(result);
+    } catch (error) {
+      const message = error.message || "Failed to summarize usage overview.";
       const code = String(message).includes("OPENAI_API_KEY") ? 503 : 500;
       res.status(code).json({ error: message });
     }

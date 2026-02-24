@@ -13,6 +13,10 @@ const state = {
   usageSummary: null,
   usageError: "",
   usageFetchedAtISO: "",
+  usageOverviewAiSummary: "",
+  usageOverviewAiSummaryModel: "",
+  usageOverviewAiSummaryError: "",
+  usageOverviewAiSummaryKey: "",
   pointerClientX: 0,
   pointerClientY: 0
 };
@@ -28,6 +32,7 @@ const FIRESTORE_USAGE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const CODEX_USAGE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
 let usageRefreshInFlight = null;
+let usageOverviewSummaryInFlight = null;
 
 function usageSourceFooterLines() {
   return [
@@ -230,6 +235,72 @@ function boldPercent(value, digits = 1) {
   return `**${formatPercent(value, digits)}**`;
 }
 
+function quoteMarkdownLines(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return [];
+  return raw
+    .split(/\r?\n/)
+    .map((line) => String(line).replace(/^\s*>\s?/, ""))
+    .map((line) => `> ${line}`);
+}
+
+function getUsageOverviewSummaryKey() {
+  if (!state.usageSummary || !state.codexUsageSummary) return "";
+  const fsPerDay = Array.isArray(state.usageSummary.perDay) ? state.usageSummary.perDay : [];
+  const last = fsPerDay[fsPerDay.length - 1] || null;
+  return JSON.stringify({
+    fsEnd: state.usageSummary.endTime || "",
+    fsLastDate: last?.date || "",
+    fsLastTotal: Number(last?.total || 0),
+    codexFetched: state.codexUsageSummary.fetchedAtISO || "",
+    codexWeeklyReset: state.codexUsageSummary?.secondaryWindow?.resetAtISO || "",
+    codexWeeklyRemaining: Number(state.codexUsageSummary?.secondaryWindow?.remainingPercent ?? -1),
+    codex5hRemaining: Number(state.codexUsageSummary?.primaryWindow?.remainingPercent ?? -1)
+  });
+}
+
+async function refreshUsageOverviewSummaryIfNeeded(options = {}) {
+  const forceReload = Boolean(options.forceReload);
+  if (!state.usageSummary || !state.codexUsageSummary) return;
+  if (state.usageError || state.codexUsageError) return;
+  const key = getUsageOverviewSummaryKey();
+  if (!key) return;
+  if (!forceReload && state.usageOverviewAiSummaryKey === key && (state.usageOverviewAiSummary || state.usageOverviewAiSummaryError)) {
+    return;
+  }
+  if (!forceReload && usageOverviewSummaryInFlight) return usageOverviewSummaryInFlight;
+
+  usageOverviewSummaryInFlight = (async () => {
+    try {
+      const result = await request("/api/usage/overview-summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          firestoreSummary: state.usageSummary,
+          codexSummary: state.codexUsageSummary
+        })
+      });
+      state.usageOverviewAiSummary = String(result.summary || "").trim();
+      state.usageOverviewAiSummaryModel = String(result.model || "").trim();
+      state.usageOverviewAiSummaryError = "";
+      state.usageOverviewAiSummaryKey = key;
+    } catch (error) {
+      state.usageOverviewAiSummary = "";
+      state.usageOverviewAiSummaryModel = "";
+      state.usageOverviewAiSummaryError = String(error.message || error || "Failed to summarize usage overview");
+      state.usageOverviewAiSummaryKey = key;
+    } finally {
+      if (state.selectedId === USAGE_OVERVIEW_PANEL_ID) {
+        fillEditor(buildUsageOverviewPanelItem(), { fromCache: false });
+      }
+    }
+  })().finally(() => {
+    usageOverviewSummaryInFlight = null;
+  });
+
+  return usageOverviewSummaryInFlight;
+}
+
 function applyPressureBadgeBorder(elm, usedPercent) {
   const v = Math.max(0, Math.min(100, Number(usedPercent || 0)));
   elm.classList.remove("border-[#7fb08a]", "border-[#d6a56a]", "border-[#d28b99]", "bg-[#fdecef]");
@@ -276,8 +347,12 @@ function buildUsageOverviewBody() {
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
     .slice(0, 14);
 
-  const lines = [
-    `<small>fetched: ${formatDate(fetchedAtISO)}</small>`,
+  const lines = [`<small>fetched: ${formatDate(fetchedAtISO)}</small>`];
+  if (state.usageOverviewAiSummary) {
+    lines.push(...quoteMarkdownLines(state.usageOverviewAiSummary));
+  }
+  lines.push(
+    "",
     "## Codex",
     "",
     state.codexUsageSummary
@@ -300,7 +375,7 @@ function buildUsageOverviewBody() {
     "",
     "| date (UTC) | read | write | delete | total |",
     "| --- | ---: | ---: | ---: | ---: |"
-  ];
+  );
 
   for (const day of fs14Desc) {
     lines.push(`| ${day.date || "-"} | ${day.read || 0} | ${day.write || 0} | ${day.delete || 0} | ${day.total || 0} |`);
@@ -933,6 +1008,7 @@ function refreshUsageIfNeeded(options = {}) {
   if (refreshCodex) jobs.push(loadCodexUsageSummary({ forceReload }));
 
   usageRefreshInFlight = Promise.all(jobs)
+    .then(() => refreshUsageOverviewSummaryIfNeeded({ forceReload }))
     .finally(() => {
       usageRefreshInFlight = null;
       if (state.selectedId === USAGE_OVERVIEW_PANEL_ID) {
@@ -1007,10 +1083,16 @@ async function loadUsageSummary(options = {}) {
     state.usageSummary = body;
     state.usageError = "";
     state.usageFetchedAtISO = new Date().toISOString();
+    state.usageOverviewAiSummary = "";
+    state.usageOverviewAiSummaryModel = "";
+    state.usageOverviewAiSummaryError = "";
   } catch (error) {
     state.usageSummary = null;
     state.usageError = error.message || "Failed to load usage";
     state.usageFetchedAtISO = "";
+    state.usageOverviewAiSummary = "";
+    state.usageOverviewAiSummaryModel = "";
+    state.usageOverviewAiSummaryError = "";
   }
 }
 
@@ -1040,10 +1122,16 @@ async function loadCodexUsageSummary(options = {}) {
     state.codexUsageSummary = body;
     state.codexUsageError = "";
     state.codexUsageFetchedAtISO = new Date().toISOString();
+    state.usageOverviewAiSummary = "";
+    state.usageOverviewAiSummaryModel = "";
+    state.usageOverviewAiSummaryError = "";
   } catch (error) {
     state.codexUsageSummary = null;
     state.codexUsageError = error.message || "Failed to load codex usage";
     state.codexUsageFetchedAtISO = "";
+    state.usageOverviewAiSummary = "";
+    state.usageOverviewAiSummaryModel = "";
+    state.usageOverviewAiSummaryError = "";
   }
 }
 
