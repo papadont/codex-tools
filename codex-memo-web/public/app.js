@@ -2172,6 +2172,13 @@ function initEvents() {
       setStatus(`Open error: ${error.message}`, true);
     }
   });
+  el.memoPreview.addEventListener("dblclick", (ev) => {
+    const hasLinkTarget = ev.target && ev.target.closest && ev.target.closest("a");
+    if (hasLinkTarget || getBodyMode() !== "preview" || isReadOnlyPanelSelected()) return;
+    setBodyMode("text");
+    updateBodyMode();
+    el.memoBodyInput.focus();
+  });
   el.projectNameInput.addEventListener("input", updateSaveButtonState);
   el.threadTitleInput.addEventListener("input", updateSaveButtonState);
   el.memoTypeInput.addEventListener("change", updateSaveButtonState);
