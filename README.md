@@ -51,6 +51,19 @@ GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcp/codex-tools-firestore-sa.json"
 CODEX_MEMO_FIREBASE_BUCKET="your-project.firebasestorage.app"
 ```
 
+任意:
+```bash
+OPENAI_ADMIN_KEY="sk-admin-..."
+USD_TO_JPY="150"
+USAGE_OVERVIEW_SUMMARY_MODE="local"
+USAGE_OVERVIEW_SUMMARY_MODEL="gpt-4.1-mini"
+```
+- `OPENAI_ADMIN_KEY` を入れると usage パネルで OpenAI API の 30日コストも表示する
+- 未設定時は OpenAI API cost は `unavailable` 表示になる
+- `USD_TO_JPY` を入れると OpenAI cost の円換算レートを上書きできる
+- `USAGE_OVERVIEW_SUMMARY_MODE=ai` で overview 要約にAIを使う
+- `USAGE_OVERVIEW_SUMMARY_MODEL` で overview 要約のモデルを上書きできる
+
 Firebase Storage をまだ有効化していない場合:
 - Firebase Console で Storage を有効化
 - バケット名を確認して `.env` の `CODEX_MEMO_FIREBASE_BUCKET` に入れる

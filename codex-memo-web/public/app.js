@@ -20,9 +20,15 @@ const state = {
   codexUsageSummary: null,
   codexUsageError: "",
   codexUsageFetchedAtISO: "",
+  storageUsageSummary: null,
+  storageUsageError: "",
+  storageUsageFetchedAtISO: "",
   usageSummary: null,
   usageError: "",
   usageFetchedAtISO: "",
+  openaiCostsSummary: null,
+  openaiCostsError: "",
+  openaiCostsFetchedAtISO: "",
   usageOverviewAiSummary: "",
   usageOverviewAiSummaryModel: "",
   usageOverviewAiSummaryError: "",
@@ -38,8 +44,12 @@ const USAGE_PANEL_ID = "__firestore_usage__";
 const USAGE_PANEL_HOURS = 24 * 14;
 const USAGE_FETCH_TIMEOUT_MS = 8000;
 const FIREBASE_USAGE_PAGE_URL = "https://console.firebase.google.com/project/hush-pointer/firestore/databases/-default-/usage/prev-24h";
+const STORAGE_USAGE_PAGE_URL = "https://console.firebase.google.com/project/hush-pointer/storage";
 const CODEX_USAGE_PAGE_URL = "https://chatgpt.com/codex/settings/usage";
+const OPENAI_USAGE_PAGE_URL = "https://platform.openai.com/usage";
 const FIRESTORE_USAGE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const STORAGE_USAGE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const OPENAI_COSTS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const CODEX_USAGE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
 let usageRefreshInFlight = null;
@@ -49,7 +59,7 @@ let attachmentLightbox = null;
 function usageSourceFooterLines() {
   return [
     "",
-    `<small><a href="#" class="usage-refs-trigger" data-open-usage-refs="1">refs:</a> [firebase usage](${FIREBASE_USAGE_PAGE_URL}) | [codex usage](${CODEX_USAGE_PAGE_URL})</small>`
+    `<small><a href="#" class="usage-refs-trigger" data-open-usage-refs="1">refs:</a> [firestore usage](${FIREBASE_USAGE_PAGE_URL}) | [storage](${STORAGE_USAGE_PAGE_URL}) | [codex usage](${CODEX_USAGE_PAGE_URL}) | [openai usage](${OPENAI_USAGE_PAGE_URL})</small>`
   ];
 }
 
@@ -646,6 +656,38 @@ function formatPercent(value, digits = 3) {
   return Number.isFinite(n) ? `${n.toFixed(digits)}%` : "-";
 }
 
+function formatUsd(value, digits = 2) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? `$${n.toFixed(digits)}` : "-";
+}
+
+function formatJpy(value, digits = 0) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return "-";
+  return `¥${n.toFixed(digits)}`;
+}
+
+function formatNumberCompact(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return "-";
+  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);
+}
+
+function formatBytes(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return "-";
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let current = n / 1024;
+  let index = 0;
+  while (current >= 1024 && index < units.length - 1) {
+    current /= 1024;
+    index += 1;
+  }
+  const digits = current >= 100 ? 0 : current >= 10 ? 1 : 2;
+  return `${current.toFixed(digits)} ${units[index]}`;
+}
+
 function formatDuration(seconds) {
   const total = Math.max(0, Number(seconds || 0));
   const h = Math.floor(total / 3600);
@@ -661,13 +703,15 @@ function resetDateText(window) {
 function getUsageOverviewFetchedAtISO() {
   const fsISO = state.usageFetchedAtISO || state.usageSummary?.endTime || "";
   const codexISO = state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO || "";
-  const fsMs = fsISO ? new Date(fsISO).getTime() : NaN;
-  const codexMs = codexISO ? new Date(codexISO).getTime() : NaN;
-  if (Number.isFinite(fsMs) && Number.isFinite(codexMs)) {
-    return fsMs <= codexMs ? fsISO : codexISO;
+  const storageISO = state.storageUsageFetchedAtISO || state.storageUsageSummary?.fetchedAtISO || "";
+  const openaiISO = state.openaiCostsFetchedAtISO || state.openaiCostsSummary?.fetchedAtISO || "";
+  const candidates = [fsISO, codexISO, storageISO, openaiISO]
+    .map((value) => ({ value, ms: value ? new Date(value).getTime() : NaN }))
+    .filter((item) => Number.isFinite(item.ms))
+    .sort((a, b) => a.ms - b.ms);
+  if (candidates.length) {
+    return candidates[0].value;
   }
-  if (Number.isFinite(fsMs)) return fsISO;
-  if (Number.isFinite(codexMs)) return codexISO;
   return "";
 }
 
@@ -692,10 +736,15 @@ function getUsageOverviewSummaryKey() {
     fsEnd: state.usageSummary.endTime || "",
     fsLastDate: last?.date || "",
     fsLastTotal: Number(last?.total || 0),
+    storageFetched: state.storageUsageSummary?.fetchedAtISO || "",
+    storageBytes: Number(state.storageUsageSummary?.current?.totalBytes || 0),
+    storageEgress30d: Number(state.storageUsageSummary?.last30d?.egressBytes || 0),
+    openaiFetched: state.openaiCostsSummary?.fetchedAtISO || "",
+    openaiTotalUsd30d: Number(state.openaiCostsSummary?.totalUsd30d || 0),
     codexFetched: state.codexUsageSummary.fetchedAtISO || "",
     codexWeeklyReset: state.codexUsageSummary?.secondaryWindow?.resetAtISO || "",
     codexWeeklyRemaining: Number(state.codexUsageSummary?.secondaryWindow?.remainingPercent ?? -1),
-    codex5hRemaining: Number(state.codexUsageSummary?.primaryWindow?.remainingPercent ?? -1)
+    roughUsdMonthly: Number(getRoughMonthlyCostSnapshot().totalUsd || 0)
   });
 }
 
@@ -717,7 +766,10 @@ async function refreshUsageOverviewSummaryIfNeeded(options = {}) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           firestoreSummary: state.usageSummary,
-          codexSummary: state.codexUsageSummary
+          codexSummary: state.codexUsageSummary,
+          storageSummary: state.storageUsageSummary,
+          openaiSummary: state.openaiCostsSummary,
+          roughCostSummary: getRoughMonthlyCostSnapshot()
         })
       });
       state.usageOverviewAiSummary = String(result.summary || "").trim();
@@ -777,10 +829,89 @@ function getFirestoreTodaySnapshot() {
   return { today, ratePercent, relativePercent };
 }
 
+function getStorageSnapshot() {
+  const summary = state.storageUsageSummary || null;
+  const estimate = summary?.estimate || {};
+  const percent = estimate.percentOfNoCost || {};
+  const noCost = summary?.noCost || {};
+  const peak = Math.max(
+    Number(percent.storage || 0),
+    Number(percent.download || 0),
+    Number(percent.classA || 0),
+    Number(percent.classB || 0)
+  );
+  return {
+    peakPercent: peak,
+    bytes: Number(summary?.current?.totalBytes || 0),
+    objects: Number(summary?.current?.totalObjects || 0),
+    egressBytes30d: Number(summary?.last30d?.egressBytes || 0),
+    storageLimitGb: Number(noCost.storageGbMonths || 0),
+    requestCounts: summary?.last30d?.requestCounts || { classA: 0, classB: 0, other: 0, total: 0 },
+    estimatedMonthlyUsd: Number(estimate.estimatedMonthlyUsd || 0),
+    bucketKind: summary?.bucketKind || "-",
+    percentOfNoCost: {
+      storage: Number(percent.storage || 0),
+      download: Number(percent.download || 0),
+      classA: Number(percent.classA || 0),
+      classB: Number(percent.classB || 0)
+    }
+  };
+}
+
+function getOpenAISnapshot() {
+  const summary = state.openaiCostsSummary || null;
+  const budgetJpy = Number(summary?.budgetReference?.amountJpy || 0);
+  const totalUsd = Number(summary?.totalUsd30d || 0);
+  return {
+    available: Boolean(summary?.available),
+    totalUsd30d: totalUsd,
+    latestDayUsd: Number(summary?.latestDayUsd || 0),
+    budgetJpy,
+    budgetStateText: budgetJpy > 0
+      ? `${formatUsd(totalUsd, 2)} / ref ¥${budgetJpy.toLocaleString()}`
+      : formatUsd(totalUsd, 2)
+  };
+}
+
+function getRoughMonthlyCostSnapshot() {
+  const storage = getStorageSnapshot();
+  const openai = getOpenAISnapshot();
+  const envRate = Number(state.runtimeConfig?.usdToJpy || 0);
+  const usdToJpy = Number.isFinite(envRate) && envRate > 0 ? envRate : 150;
+  const storageUsd = Number(storage.estimatedMonthlyUsd || 0);
+  const openaiUsd = openai.available ? Number(openai.totalUsd30d || 0) : 0;
+  return {
+    totalUsd: storageUsd + openaiUsd,
+    storageUsd,
+    openaiUsd,
+    totalJpy: (storageUsd + openaiUsd) * usdToJpy,
+    storageJpy: storageUsd * usdToJpy,
+    openaiJpy: openaiUsd * usdToJpy,
+    usdToJpy
+  };
+}
+
+function getMonthPaceInfo(baseDate = new Date()) {
+  const date = new Date(baseDate);
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const day = date.getDate();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  return {
+    dayOfMonth: day,
+    daysInMonth,
+    elapsedRatio: day / Math.max(1, daysInMonth),
+    remainingDays: Math.max(0, daysInMonth - day)
+  };
+}
+
 function buildUsageOverviewBody() {
   const fs = getFirestoreTodaySnapshot();
-  const codexPrimary = state.codexUsageSummary?.primaryWindow || null;
+  const storage = getStorageSnapshot();
+  const openai = getOpenAISnapshot();
+  const roughCost = getRoughMonthlyCostSnapshot();
   const codexSecondary = state.codexUsageSummary?.secondaryWindow || null;
+  const monthPace = getMonthPaceInfo();
   const fetchedAtISO = getUsageOverviewFetchedAtISO();
   const fsPerDay = Array.isArray(state.usageSummary?.perDay) ? state.usageSummary.perDay : [];
   const fs14Desc = [...fsPerDay]
@@ -793,14 +924,39 @@ function buildUsageOverviewBody() {
   }
   lines.push(
     "",
+    `- rough total monthly cost: **${formatJpy(roughCost.totalJpy, 0)}** / redline ¥3000 (Storage ${formatJpy(roughCost.storageJpy, 0)} + OpenAI ${formatJpy(roughCost.openaiJpy, 0)})`,
+    "",
     "## Codex",
     "",
     state.codexUsageSummary
-      ? `- 5h remaining: ${boldPercent(codexPrimary?.remainingPercent, 0)} reset: ${resetDateText(codexPrimary)}`
+      ? `- weekly remaining: ${boldPercent(codexSecondary?.remainingPercent, 0)} reset: ${resetDateText(codexSecondary)}`
       : `- status: ${state.codexUsageError ? `error (${state.codexUsageError})` : "loading"}`,
     state.codexUsageSummary
-      ? `- weekly remaining: ${boldPercent(codexSecondary?.remainingPercent, 0)} reset: ${resetDateText(codexSecondary)}`
-      : "- weekly remaining: -",
+      ? `- next resetまで: ${formatDuration(state.codexUsageSummary?.secondaryWindow?.resetAfterSeconds || 0)} / used ${boldPercent(codexSecondary?.usedPercent, 0)}`
+      : "- next resetまで: -",
+    "",
+    "## OpenAI API",
+    "",
+    state.openaiCostsSummary
+      ? state.openaiCostsSummary.available
+        ? `- month-to-date: **${formatJpy(roughCost.openaiJpy, 0)}** / today ${monthPace.dayOfMonth}/${monthPace.daysInMonth}`
+        : `- status: unavailable (${state.openaiCostsSummary.reason || "-"})`
+      : `- status: ${state.openaiCostsError ? `error (${state.openaiCostsError})` : "loading"}`,
+    state.openaiCostsSummary && state.openaiCostsSummary.available
+      ? `- month-end rough: ${formatJpy((roughCost.openaiJpy / Math.max(0.001, monthPace.elapsedRatio)), 0)} if current pace continues`
+      : "- month-end rough: -",
+    "",
+    "## Storage",
+    "",
+    state.storageUsageSummary
+      ? `- now: ${formatBytes(storage.bytes)} / objects ${formatNumberCompact(storage.objects)}`
+      : `- status: ${state.storageUsageError ? `error (${state.storageUsageError})` : "loading"}`,
+    state.storageUsageSummary
+      ? `- no-cost usage: storage ${boldPercent(storage.percentOfNoCost.storage, 1)} / egress ${boldPercent(storage.percentOfNoCost.download, 1)} / A ${boldPercent(storage.percentOfNoCost.classA, 1)} / B ${boldPercent(storage.percentOfNoCost.classB, 1)}`
+      : "- no-cost usage: -",
+    state.storageUsageSummary
+      ? `- pace: 30d egress ${formatBytes(storage.egressBytes30d)} / rough overage ${formatJpy(roughCost.storageJpy, 0)} mo`
+      : "- rough overage estimate: -",
     "",
     "## Firestore",
     "",
@@ -808,8 +964,8 @@ function buildUsageOverviewBody() {
       ? `- free-tier: R ${boldPercent(fs.ratePercent.read, 1)} / W ${boldPercent(fs.ratePercent.write, 1)} / D ${boldPercent(fs.ratePercent.delete, 1)}`
       : `- status: ${state.usageError ? `error (${state.usageError})` : "loading"}`,
     state.usageSummary
-      ? `- vs 14d max: R ${boldPercent(fs.relativePercent.read, 0)} / W ${boldPercent(fs.relativePercent.write, 0)} / D ${boldPercent(fs.relativePercent.delete, 0)}`
-      : "- vs 14d max: -",
+      ? `- pace vs free-tier: R ${boldPercent(fs.relativePercent.read, 0)} / W ${boldPercent(fs.relativePercent.write, 0)} / D ${boldPercent(fs.relativePercent.delete, 0)} of recent peak`
+      : "- pace vs free-tier: -",
     "",
     "### Firestore 14d details",
     "",
@@ -1611,11 +1767,13 @@ function shouldRefreshByAge(fetchedAtISO, intervalMs) {
 function shouldRefreshUsage(options = {}) {
   const forceReload = Boolean(options.forceReload);
   if (forceReload) {
-    return { refreshFirestore: true, refreshCodex: true };
+    return { refreshFirestore: true, refreshCodex: true, refreshStorage: true, refreshOpenAI: true };
   }
   return {
     refreshFirestore: shouldRefreshByAge(state.usageFetchedAtISO, FIRESTORE_USAGE_REFRESH_INTERVAL_MS),
-    refreshCodex: shouldRefreshByAge(state.codexUsageFetchedAtISO, CODEX_USAGE_REFRESH_INTERVAL_MS)
+    refreshCodex: shouldRefreshByAge(state.codexUsageFetchedAtISO, CODEX_USAGE_REFRESH_INTERVAL_MS),
+    refreshStorage: shouldRefreshByAge(state.storageUsageFetchedAtISO, STORAGE_USAGE_REFRESH_INTERVAL_MS),
+    refreshOpenAI: shouldRefreshByAge(state.openaiCostsFetchedAtISO, OPENAI_COSTS_REFRESH_INTERVAL_MS)
   };
 }
 
@@ -1623,10 +1781,15 @@ function refreshUsageIfNeeded(options = {}) {
   if (state.usageTileCollapsed) {
     return Promise.resolve();
   }
-  const { refreshFirestore, refreshCodex } = shouldRefreshUsage(options);
+  const {
+    refreshFirestore,
+    refreshCodex,
+    refreshStorage,
+    refreshOpenAI
+  } = shouldRefreshUsage(options);
   const forceReload = Boolean(options.forceReload);
 
-  if (!refreshFirestore && !refreshCodex) {
+  if (!refreshFirestore && !refreshCodex && !refreshStorage && !refreshOpenAI) {
     return Promise.resolve();
   }
   if (!forceReload && usageRefreshInFlight) {
@@ -1636,6 +1799,8 @@ function refreshUsageIfNeeded(options = {}) {
   const jobs = [];
   if (refreshFirestore) jobs.push(loadUsageSummary({ forceReload }));
   if (refreshCodex) jobs.push(loadCodexUsageSummary({ forceReload }));
+  if (refreshStorage) jobs.push(loadStorageUsageSummary({ forceReload }));
+  if (refreshOpenAI) jobs.push(loadOpenAICostsSummary({ forceReload }));
 
   usageRefreshInFlight = Promise.all(jobs)
     .then(() => refreshUsageOverviewSummaryIfNeeded({ forceReload }))
@@ -1766,6 +1931,72 @@ async function loadCodexUsageSummary(options = {}) {
   }
 }
 
+async function loadStorageUsageSummary(options = {}) {
+  const forceReload = Boolean(options.forceReload);
+  const params = new URLSearchParams();
+  if (forceReload) params.set("nocache", "1");
+
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const fetchPromise = fetch(
+    `/api/usage/storage?${params.toString()}`,
+    controller ? { signal: controller.signal } : undefined
+  );
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => {
+      if (controller) controller.abort();
+      reject(new Error(`Timed out (${USAGE_FETCH_TIMEOUT_MS}ms)`));
+    }, USAGE_FETCH_TIMEOUT_MS);
+  });
+
+  try {
+    const res = await Promise.race([fetchPromise, timeoutPromise]);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body.error || `HTTP ${res.status}`);
+    }
+    state.storageUsageSummary = body;
+    state.storageUsageError = "";
+    state.storageUsageFetchedAtISO = new Date().toISOString();
+  } catch (error) {
+    state.storageUsageSummary = null;
+    state.storageUsageError = error.message || "Failed to load storage usage";
+    state.storageUsageFetchedAtISO = "";
+  }
+}
+
+async function loadOpenAICostsSummary(options = {}) {
+  const forceReload = Boolean(options.forceReload);
+  const params = new URLSearchParams();
+  if (forceReload) params.set("nocache", "1");
+
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const fetchPromise = fetch(
+    `/api/usage/openai-costs?${params.toString()}`,
+    controller ? { signal: controller.signal } : undefined
+  );
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => {
+      if (controller) controller.abort();
+      reject(new Error(`Timed out (${USAGE_FETCH_TIMEOUT_MS}ms)`));
+    }, USAGE_FETCH_TIMEOUT_MS);
+  });
+
+  try {
+    const res = await Promise.race([fetchPromise, timeoutPromise]);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body.error || `HTTP ${res.status}`);
+    }
+    state.openaiCostsSummary = body;
+    state.openaiCostsError = "";
+    state.openaiCostsFetchedAtISO = new Date().toISOString();
+  } catch (error) {
+    state.openaiCostsSummary = null;
+    state.openaiCostsError = error.message || "Failed to load OpenAI costs";
+    state.openaiCostsFetchedAtISO = "";
+  }
+}
+
 function renderList() {
   el.memoList.innerHTML = "";
   const items = sortMemosForList(listItemsForView());
@@ -1785,118 +2016,263 @@ function renderList() {
 
   const fsSnapshot = getFirestoreTodaySnapshot();
   const fsPeak = Math.max(fsSnapshot.ratePercent.read, fsSnapshot.ratePercent.write, fsSnapshot.ratePercent.delete);
-  const codexPrimary = state.codexUsageSummary?.primaryWindow || null;
+  const storageSnapshot = getStorageSnapshot();
+  const openaiSnapshot = getOpenAISnapshot();
   const codexSecondary = state.codexUsageSummary?.secondaryWindow || null;
   const usageActive = isUsageOverviewPanelSelected();
 
   const row = document.createElement("div");
   row.className = "grid grid-cols-2 gap-1.5";
 
-  const left = document.createElement("div");
-  left.className = "rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1";
-  left.title = "Double-click to open Firebase usage";
-  left.addEventListener("dblclick", (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    window.open(FIREBASE_USAGE_PAGE_URL, "_blank", "noopener,noreferrer");
-  });
-  const leftTop = document.createElement("div");
-  leftTop.className = "flex items-center justify-between gap-1";
-  const leftTitle = document.createElement("strong");
-  leftTitle.className = "block text-[12px] leading-4 text-[#f9fafb]";
-  leftTitle.textContent = "Firebase";
-  const fsBadge = document.createElement("span");
-  fsBadge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none";
-  fsBadge.classList.add("border", "bg-[#ffffff]", "text-[#374151]");
-  applyPressureBadgeBorder(fsBadge, fsPeak);
-  fsBadge.textContent = state.usageSummary ? `${fsPeak.toFixed(1)}%` : "-";
-  leftTop.appendChild(leftTitle);
-  leftTop.appendChild(fsBadge);
-
-  const fsMini = document.createElement("div");
-  fsMini.className = "mt-0.5 flex h-6 items-end gap-1";
-  const fsBarDefs = [
-    { key: "read", color: "bg-[#6f86ac]", bg: "bg-[#d7deeb]" },
-    { key: "write", color: "bg-[#d59d4f]", bg: "bg-[#eee1c8]" },
-    { key: "delete", color: "bg-[#cf7896]", bg: "bg-[#edd4df]" }
-  ];
-  for (const def of fsBarDefs) {
-    const track = document.createElement("span");
-    track.className = `relative h-full w-[8px] overflow-hidden rounded-[3px] ${def.bg}`;
-    const fill = document.createElement("span");
-    fill.className = `absolute bottom-0 left-0 right-0 ${def.color}`;
-    const h = state.usageSummary ? Math.max(2, Math.min(100, Number(fsSnapshot.relativePercent[def.key] || 0))) : 2;
-    fill.style.height = `${h}%`;
-    track.title = state.usageSummary
-      ? `${def.key}: ${fsSnapshot.today[def.key] || 0} / free-tier ${formatPercent(fsSnapshot.ratePercent[def.key], 2)} / 14d比 ${formatPercent(fsSnapshot.relativePercent[def.key], 1)}`
-      : "loading";
-    track.appendChild(fill);
-    fsMini.appendChild(track);
+  function makeMiniBars(values, colors, backgrounds, titles = [], labels = []) {
+    const wrap = document.createElement("div");
+    wrap.className = "mt-0.5 flex h-9 w-full items-end justify-center gap-1";
+    values.forEach((value, index) => {
+      const col = document.createElement("div");
+      col.className = "flex w-4 flex-col items-center gap-0.5";
+      const track = document.createElement("span");
+      track.className = `relative block h-7 w-[7px] overflow-hidden rounded-full ${backgrounds[index]}`;
+      track.title = titles[index] || "";
+      const fill = document.createElement("span");
+      fill.className = `absolute bottom-0 left-0 right-0 rounded-full ${colors[index]}`;
+      fill.style.height = `${Math.max(8, Math.min(100, Number(value || 0)))}%`;
+      const label = document.createElement("span");
+      label.className = "text-[8px] font-semibold leading-none text-[#eef4ff]";
+      label.textContent = labels[index] || String(index + 1);
+      track.appendChild(fill);
+      col.appendChild(track);
+      col.appendChild(label);
+      wrap.appendChild(col);
+    });
+    return wrap;
   }
 
-  const fsSummaryText = state.usageSummary
-    ? `R: ${fsSnapshot.today.read || 0} / W: ${fsSnapshot.today.write || 0} / D: ${fsSnapshot.today.delete || 0}`
-    : (state.usageError ? "error" : "loading...");
-  const leftMain = document.createElement("div");
-  leftMain.className = "mt-0.5 text-[10px] leading-3.5 text-[#e5e7eb]";
-  leftMain.textContent = fsSummaryText;
-  left.appendChild(leftTop);
-  left.appendChild(fsMini);
-  left.appendChild(leftMain);
-
-  const right = document.createElement("div");
-  right.className = "rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1";
-  right.title = "Double-click to open Codex usage";
-  right.addEventListener("dblclick", (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    window.open(CODEX_USAGE_PAGE_URL, "_blank", "noopener,noreferrer");
-  });
-  const rightTop = document.createElement("div");
-  rightTop.className = "flex items-center justify-between gap-1";
-  const rightTitle = document.createElement("strong");
-  rightTitle.className = "block text-[12px] leading-4 text-[#f9fafb]";
-  rightTitle.textContent = "Codex";
-  const codexBadge = document.createElement("span");
-  codexBadge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
-  applyPressureBadgeBorder(codexBadge, 100 - Number(codexSecondary?.remainingPercent || 0));
-  codexBadge.textContent = state.codexUsageSummary ? `${formatPercent(codexSecondary?.usedPercent, 0)}` : "-";
-  rightTop.appendChild(rightTitle);
-  rightTop.appendChild(codexBadge);
-  const codexBars = document.createElement("div");
-  codexBars.className = "mt-0.5 space-y-0.5";
-  const codexDefs = [
-    { label: "5h", value: Number(codexPrimary?.remainingPercent || 0), color: "bg-[#b88f55]", bg: "bg-[#efdfc7]" },
-    { label: "1w", value: Number(codexSecondary?.remainingPercent || 0), color: "bg-[#7a9f7a]", bg: "bg-[#ddebd9]" }
-  ];
-  for (const def of codexDefs) {
-    const rowBar = document.createElement("div");
-    rowBar.className = "flex items-center gap-1";
-    const label = document.createElement("span");
-    label.className = "w-5 text-[10px] leading-3 text-[#e5e7eb]";
-    label.textContent = def.label;
-    const track = document.createElement("span");
-    track.className = `relative block h-[7px] flex-1 overflow-hidden rounded ${def.bg}`;
-    const fill = document.createElement("span");
-    fill.className = `absolute bottom-0 left-0 top-0 ${def.color}`;
-    fill.style.width = `${state.codexUsageSummary ? Math.max(2, Math.min(100, def.value)) : 2}%`;
-    track.appendChild(fill);
-    rowBar.appendChild(label);
-    rowBar.appendChild(track);
-    codexBars.appendChild(rowBar);
+  function makeMiniProgressRows(rows) {
+    const wrap = document.createElement("div");
+    wrap.className = "mt-0.5 w-full space-y-0.5";
+    rows.forEach((row) => {
+      const line = document.createElement("div");
+      line.className = "flex w-full items-center gap-1";
+      const label = document.createElement("span");
+      label.className = "w-5 text-[9px] font-semibold leading-3 text-[#eef4ff]";
+      label.textContent = row.label;
+      const track = document.createElement("span");
+      track.className = `relative block h-[6px] flex-1 overflow-hidden rounded-full ${row.bg}`;
+      track.title = row.title || "";
+      const fill = document.createElement("span");
+      fill.className = `absolute bottom-0 left-0 top-0 rounded-full ${row.color}`;
+      fill.style.width = `${Math.max(8, Math.min(100, Number(row.value || 0)))}%`;
+      track.appendChild(fill);
+      line.appendChild(label);
+      line.appendChild(track);
+      wrap.appendChild(line);
+    });
+    return wrap;
   }
-  const codexSummaryText = state.codexUsageSummary
-    ? `5h: ${formatPercent(codexPrimary?.remainingPercent, 0)} 1w: ${formatPercent(codexSecondary?.remainingPercent, 0)}`
-    : (state.codexUsageError ? "error" : "loading...");
-  const rightMain = document.createElement("div");
-  rightMain.className = "mt-0.5 text-[10px] leading-3.5 text-[#e5e7eb]";
-  rightMain.textContent = codexSummaryText;
-  right.appendChild(rightTop);
-  right.appendChild(codexBars);
-  right.appendChild(rightMain);
 
-  row.appendChild(left);
-  row.appendChild(right);
+  function makeMiniLine(values, colorClass, bgClass) {
+    const wrap = document.createElement("div");
+    wrap.className = `mt-0.5 h-7 w-full overflow-hidden rounded-[6px] ${bgClass} px-1 py-0.5`;
+    const points = values.map((value, index) => {
+      const x = values.length <= 1 ? 0 : (index / (values.length - 1)) * 100;
+      const y = 100 - Math.max(6, Math.min(94, Number(value || 0)));
+      return `${x},${y}`;
+    }).join(" ");
+    wrap.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" class="h-full w-full"><polyline fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" points="${points}" class="${colorClass}"></polyline></svg>`;
+    return wrap;
+  }
+
+  function makeMiniOpenAICombinedGraph(dailyValues, currentUsd, maxUsd = 5, markerUsd = 3) {
+    const wrap = document.createElement("div");
+    wrap.className = "mt-0.5 w-full space-y-0.5";
+
+    const line = document.createElement("div");
+    line.className = "h-5 w-full overflow-hidden rounded-[6px] bg-[#4b5563] px-1 py-0.5";
+    const points = dailyValues.map((value, index) => {
+      const x = dailyValues.length <= 1 ? 0 : (index / (dailyValues.length - 1)) * 100;
+      const y = 100 - Math.max(6, Math.min(94, Number(value || 0)));
+      return `${x},${y}`;
+    }).join(" ");
+    line.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" class="h-full w-full"><polyline fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" points="${points}" class="text-[#ebc8d4]"></polyline></svg>`;
+
+    const track = document.createElement("div");
+    track.className = "relative h-[6px] w-full overflow-hidden rounded-full bg-[#eceef1]";
+    track.title = `current ${formatUsd(currentUsd, 2)} / max ${formatUsd(maxUsd, 0)}`;
+
+    const fill = document.createElement("span");
+    fill.className = "absolute bottom-0 left-0 top-0 rounded-full bg-[#cf7896]";
+    fill.style.width = `${Math.max(0, Math.min(100, (Number(currentUsd || 0) / Math.max(0.001, maxUsd)) * 100))}%`;
+    track.appendChild(fill);
+
+    if (Number.isFinite(markerUsd) && markerUsd > 0) {
+      const marker = document.createElement("span");
+      marker.className = "absolute top-1/2 z-10 h-[12px] w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#7b828a]";
+      marker.style.left = `${Math.max(0, Math.min(100, (Number(markerUsd || 0) / Math.max(0.001, maxUsd)) * 100))}%`;
+      marker.title = `marker ${formatUsd(markerUsd, 0)}`;
+      track.appendChild(marker);
+    }
+
+    wrap.appendChild(line);
+    wrap.appendChild(track);
+    return wrap;
+  }
+
+  function makeUsageCard({ title, badgeText, badgePressure, summaryText, summaryHtml, graphEl, dblclickUrl, titleText }) {
+    const card = document.createElement("div");
+    card.className = "flex h-[74px] flex-col rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1";
+    card.title = titleText || "";
+    if (dblclickUrl) {
+      card.addEventListener("dblclick", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        window.open(dblclickUrl, "_blank", "noopener,noreferrer");
+      });
+    }
+    const top = document.createElement("div");
+    top.className = "flex items-center justify-between gap-1";
+    const head = document.createElement("strong");
+    head.className = "block text-[12px] leading-4 text-[#f9fafb]";
+    head.textContent = title;
+    const badge = document.createElement("span");
+    badge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
+    applyPressureBadgeBorder(badge, badgePressure);
+    badge.textContent = badgeText;
+    const main = document.createElement("div");
+    main.className = "mt-auto truncate text-[10px] leading-3 text-[#e5e7eb]";
+    if (summaryHtml) {
+      main.innerHTML = summaryHtml;
+    } else {
+      main.textContent = summaryText;
+    }
+    top.appendChild(head);
+    top.appendChild(badge);
+    card.appendChild(top);
+    if (graphEl) {
+      const graphSlot = document.createElement("div");
+      graphSlot.className = "flex h-8 w-full min-w-0 items-center justify-center";
+      graphSlot.appendChild(graphEl);
+      card.appendChild(graphSlot);
+    }
+    card.appendChild(main);
+    return card;
+  }
+
+  row.appendChild(makeUsageCard({
+    title: "Firestore",
+    badgeText: state.usageSummary ? `${fsPeak.toFixed(1)}%` : "-",
+    badgePressure: fsPeak,
+    graphEl: makeMiniBars(
+      [
+        fsSnapshot.relativePercent.read,
+        fsSnapshot.relativePercent.write,
+        fsSnapshot.relativePercent.delete
+      ],
+      ["bg-[#bfd2ff]", "bg-[#ffd38f]", "bg-[#ffb6cf]"],
+      ["bg-[#8496bb]", "bg-[#917953]", "bg-[#94677b]"],
+      [
+        `read vs14 ${formatPercent(fsSnapshot.relativePercent.read, 1)}`,
+        `write vs14 ${formatPercent(fsSnapshot.relativePercent.write, 1)}`,
+        `delete vs14 ${formatPercent(fsSnapshot.relativePercent.delete, 1)}`
+      ],
+      ["R", "W", "D"]
+    ),
+    summaryHtml: state.usageSummary
+      ? `<strong>r${formatPercent(fsSnapshot.ratePercent.read, 1)}</strong> - w${formatPercent(fsSnapshot.ratePercent.write, 1)} - d${formatPercent(fsSnapshot.ratePercent.delete, 1)}`
+      : "",
+    summaryText: state.usageSummary ? "" : (state.usageError ? "error" : "loading..."),
+    dblclickUrl: FIREBASE_USAGE_PAGE_URL,
+    titleText: "Double-click to open Firestore usage"
+  }));
+
+  row.appendChild(makeUsageCard({
+    title: "Storage",
+    badgeText: state.storageUsageSummary ? `${storageSnapshot.peakPercent.toFixed(1)}%` : "-",
+    badgePressure: storageSnapshot.peakPercent,
+    graphEl: makeMiniProgressRows(
+      [
+        {
+          label: "S",
+          value: Number(storageSnapshot.percentOfNoCost.storage || 0),
+          color: "bg-[#b8efe8]",
+          bg: "bg-[#5f8b87]",
+          title: `storage ${formatPercent(storageSnapshot.percentOfNoCost.storage, 1)}`
+        },
+        {
+          label: "T",
+          value: Number(storageSnapshot.percentOfNoCost.download || 0),
+          color: "bg-[#9fe0ff]",
+          bg: "bg-[#5a88a0]",
+          title: `transfer ${formatPercent(storageSnapshot.percentOfNoCost.download, 1)}`
+        }
+      ]
+    ),
+    summaryHtml: state.storageUsageSummary
+      ? `sv: <strong>${formatBytes(storageSnapshot.bytes)}</strong> - tr:<strong>${formatBytes(storageSnapshot.egressBytes30d)}</strong>`
+      : "",
+    summaryText: state.storageUsageSummary ? "" : (state.storageUsageError ? "error" : "loading..."),
+    dblclickUrl: STORAGE_USAGE_PAGE_URL,
+    titleText: "Double-click to open Storage usage"
+  }));
+
+  row.appendChild(makeUsageCard({
+    title: "OpenAI",
+    badgeText: state.openaiCostsSummary
+      ? state.openaiCostsSummary.available
+        ? formatUsd(openaiSnapshot.totalUsd30d, 2)
+        : "n/a"
+      : "-",
+    badgePressure: Math.min(100, openaiSnapshot.totalUsd30d * 10),
+    graphEl: makeMiniOpenAICombinedGraph(
+      (Array.isArray(state.openaiCostsSummary?.daily) ? state.openaiCostsSummary.daily.slice(-10) : [])
+        .map((item) => Number(item.amountUsd || 0) * 100)
+        .map((value) => Math.max(10, Math.min(100, value * 2))),
+      Number(openaiSnapshot.totalUsd30d || 0),
+      3.5,
+      3
+    ),
+    summaryHtml: state.openaiCostsSummary
+      ? state.openaiCostsSummary.available
+        ? `<strong>${formatUsd(openaiSnapshot.totalUsd30d, 3)}</strong> = <strong>${formatJpy(getRoughMonthlyCostSnapshot().openaiJpy, 0)}</strong>  *${Math.round(getRoughMonthlyCostSnapshot().usdToJpy)}`
+        : ""
+      : "",
+    summaryText: state.openaiCostsSummary
+      ? state.openaiCostsSummary.available
+        ? ""
+        : "admin key not set"
+      : (state.openaiCostsError ? "error" : "loading..."),
+    dblclickUrl: OPENAI_USAGE_PAGE_URL,
+    titleText: "Double-click to open OpenAI usage"
+  }));
+
+  row.appendChild(makeUsageCard({
+    title: "Codex",
+    badgeText: state.codexUsageSummary ? `${formatPercent(codexSecondary?.usedPercent, 0)}` : "-",
+    badgePressure: 100 - Number(codexSecondary?.remainingPercent || 0),
+    graphEl: makeMiniProgressRows(
+      [
+        {
+          label: "5h",
+          value: Number(state.codexUsageSummary?.primaryWindow?.remainingPercent || 0),
+          color: "bg-[#ffd792]",
+          bg: "bg-[#826542]",
+          title: `5h ${formatPercent(state.codexUsageSummary?.primaryWindow?.remainingPercent, 0)}`
+        },
+        {
+          label: "1w",
+          value: Number(codexSecondary?.remainingPercent || 0),
+          color: "bg-[#baf0a7]",
+          bg: "bg-[#5c8257]",
+          title: `1w ${formatPercent(codexSecondary?.remainingPercent, 0)}`
+        }
+      ]
+    ),
+    summaryHtml: state.codexUsageSummary
+      ? `5h:<strong>${formatPercent(state.codexUsageSummary?.primaryWindow?.remainingPercent, 0)}</strong> - 1w:<strong>${formatPercent(codexSecondary?.remainingPercent, 0)}</strong>`
+      : "",
+    summaryText: state.codexUsageSummary ? "" : (state.codexUsageError ? "error" : "loading..."),
+    dblclickUrl: CODEX_USAGE_PAGE_URL,
+    titleText: "Double-click to open Codex usage"
+  }));
   const usageTop = document.createElement("div");
   usageTop.className = state.usageTileCollapsed
     ? "mb-1 flex cursor-pointer items-center justify-between rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1"
@@ -1927,34 +2303,38 @@ function renderList() {
   usageTop.appendChild(usageLabel);
   if (state.usageTileCollapsed) {
     const collapsedSummary = document.createElement("div");
-    collapsedSummary.className = "mx-2 grid min-w-0 flex-1 grid-cols-2 items-center justify-items-center gap-2 text-[11px] leading-4 text-[#e5e7eb]";
+    collapsedSummary.className = "mx-2 grid min-w-0 flex-1 grid-cols-4 items-center justify-items-center gap-1 text-[11px] leading-4 text-[#e5e7eb]";
 
-    const fsWrap = document.createElement("span");
-    fsWrap.className = "inline-flex min-w-0 items-center justify-center gap-1";
-    const fsLabel = document.createElement("span");
-    fsLabel.className = "text-[12px] font-bold tracking-wide text-[#e5e7eb]";
-    fsLabel.textContent = "Firebase";
-    const fsCollapsedBadge = document.createElement("span");
-    fsCollapsedBadge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
-    applyPressureBadgeBorder(fsCollapsedBadge, fsPeak);
-    fsCollapsedBadge.textContent = state.usageSummary ? `${fsPeak.toFixed(1)}%` : "-";
-    fsWrap.appendChild(fsLabel);
-    fsWrap.appendChild(fsCollapsedBadge);
-
-    const codexWrap = document.createElement("span");
-    codexWrap.className = "inline-flex min-w-0 items-center justify-center gap-1";
-    const codexLabel = document.createElement("span");
-    codexLabel.className = "text-[12px] font-bold tracking-wide text-[#e5e7eb]";
-    codexLabel.textContent = "Codex";
-    const codexCollapsedBadge = document.createElement("span");
-    codexCollapsedBadge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
-    applyPressureBadgeBorder(codexCollapsedBadge, 100 - Number(codexSecondary?.remainingPercent || 0));
-    codexCollapsedBadge.textContent = state.codexUsageSummary ? `${formatPercent(codexSecondary?.usedPercent, 0)}` : "-";
-    codexWrap.appendChild(codexLabel);
-    codexWrap.appendChild(codexCollapsedBadge);
-
-    collapsedSummary.appendChild(fsWrap);
-    collapsedSummary.appendChild(codexWrap);
+    const collapsedItems = [
+      { label: "FS", text: state.usageSummary ? `${fsPeak.toFixed(1)}%` : "-", pressure: fsPeak },
+      { label: "ST", text: state.storageUsageSummary ? `${storageSnapshot.peakPercent.toFixed(1)}%` : "-", pressure: storageSnapshot.peakPercent },
+      {
+        label: "OA",
+        text: state.openaiCostsSummary
+          ? state.openaiCostsSummary.available ? formatUsd(openaiSnapshot.totalUsd30d, 1) : "n/a"
+          : "-",
+        pressure: Math.min(100, openaiSnapshot.totalUsd30d * 10)
+      },
+      {
+        label: "CX",
+        text: state.codexUsageSummary ? `${formatPercent(codexSecondary?.usedPercent, 0)}` : "-",
+        pressure: 100 - Number(codexSecondary?.remainingPercent || 0)
+      }
+    ];
+    for (const item of collapsedItems) {
+      const wrap = document.createElement("span");
+      wrap.className = "inline-flex min-w-0 items-center justify-center gap-1";
+      const label = document.createElement("span");
+      label.className = "text-[11px] font-bold tracking-wide text-[#e5e7eb]";
+      label.textContent = item.label;
+      const badge = document.createElement("span");
+      badge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
+      applyPressureBadgeBorder(badge, item.pressure);
+      badge.textContent = item.text;
+      wrap.appendChild(label);
+      wrap.appendChild(badge);
+      collapsedSummary.appendChild(wrap);
+    }
     usageTop.appendChild(collapsedSummary);
   }
   usageTop.appendChild(collapseIcon);
@@ -1962,7 +2342,7 @@ function renderList() {
   if (!state.usageTileCollapsed) {
     usageLi.appendChild(row);
   }
-  usageLi.title = `Firebase: ${formatDate(state.usageFetchedAtISO || state.usageSummary?.endTime)} | Codex: ${formatDate(state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO)}`;
+  usageLi.title = `Firestore: ${formatDate(state.usageFetchedAtISO || state.usageSummary?.endTime)} | Storage: ${formatDate(state.storageUsageFetchedAtISO || state.storageUsageSummary?.fetchedAtISO)} | OpenAI: ${formatDate(state.openaiCostsFetchedAtISO || state.openaiCostsSummary?.fetchedAtISO)} | Codex: ${formatDate(state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO)}`;
   usageLi.addEventListener("click", () => fillEditor(buildUsageOverviewPanelItem(), { fromCache: false }));
   el.memoList.appendChild(usageLi);
 
