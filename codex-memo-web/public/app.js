@@ -16,6 +16,7 @@ const state = {
   selectedCacheHit: false,
   showOnlyDeletable: false,
   storageFilterKind: "",
+  autoRefreshEnabled: true,
   usageTileCollapsed: false,
   codexUsageSummary: null,
   codexUsageError: "",
@@ -71,6 +72,7 @@ const el = {
   typeSelect: document.getElementById("typeSelect"),
   storageFilterWrap: document.getElementById("storageFilterWrap"),
   storageFilterSelect: document.getElementById("storageFilterSelect"),
+  autoRefreshIndicator: document.getElementById("autoRefreshIndicator"),
   modeBadge: document.getElementById("modeBadge"),
   defaultStorageWrap: document.getElementById("defaultStorageWrap"),
   defaultStorageSelect: document.getElementById("defaultStorageSelect"),
@@ -146,6 +148,29 @@ function setStatus(message, isError = false, tone = "default") {
     return;
   }
   el.status.classList.add("text-[#5d79a8]");
+}
+
+function renderAutoRefreshIndicator() {
+  if (!el.autoRefreshIndicator) return;
+  el.autoRefreshIndicator.title = state.autoRefreshEnabled
+    ? "Auto refresh ON"
+    : "Auto refresh OFF";
+  el.autoRefreshIndicator.setAttribute("aria-pressed", state.autoRefreshEnabled ? "true" : "false");
+  el.autoRefreshIndicator.className = state.autoRefreshEnabled
+    ? "h-3 w-3 rounded-full border border-[#8eb991] bg-[#8fcf95] shadow-[0_0_0_1px_rgba(255,255,255,0.55)_inset,0_0_5px_rgba(143,207,149,0.55)]"
+    : "h-3 w-3 rounded-full border border-[#bfc6d1] bg-[#e7eaf0]";
+}
+
+function notifyAutoRefreshDisabled() {
+  setStatus("Auto refresh OFF。タイトルをダブルクリックで更新", false, "force");
+}
+
+function maybeRunAutoRefresh(task) {
+  if (state.autoRefreshEnabled) {
+    return task();
+  }
+  notifyAutoRefreshDisabled();
+  return Promise.resolve(false);
 }
 
 function ensureSummaryTooltip() {
@@ -1301,31 +1326,8 @@ async function showModeLaunchHint() {
 }
 
 function renderStorageInfo(item) {
-  const isDraft = !state.selectedId && !(item && isSpecialPanelId(item.id));
-  if (isDraft) {
-    el.storageInfo.textContent = "";
-    el.storageInfo.className = "hidden";
-    return;
-  }
-  if (item && isSpecialPanelId(item.id)) {
-    el.storageInfo.textContent = "-";
-    el.storageInfo.className = "inline-flex h-7 items-center px-1 text-[11px] font-semibold text-[#5e6f8d]";
-    return;
-  }
-  const kind = normalizeStorageKind(item?.storageKind || currentEditingStorageKind());
-  el.storageInfo.className = [
-    "inline-flex",
-    "h-3.5",
-    "items-center",
-    "rounded-md",
-    "border",
-    "px-1",
-    "text-[9px]",
-    "font-semibold",
-    "leading-none",
-    storageBadgeClass(kind)
-  ].join(" ");
-  el.storageInfo.textContent = storageBadgeText(kind);
+  el.storageInfo.textContent = "";
+  el.storageInfo.className = "hidden";
 }
 
 function escapeHtml(text) {
@@ -1778,8 +1780,12 @@ function shouldRefreshUsage(options = {}) {
 }
 
 function refreshUsageIfNeeded(options = {}) {
+  const autoTriggered = Boolean(options.autoTriggered);
+  if (autoTriggered && !state.autoRefreshEnabled) {
+    return Promise.resolve(false);
+  }
   if (state.usageTileCollapsed) {
-    return Promise.resolve();
+    return Promise.resolve(false);
   }
   const {
     refreshFirestore,
@@ -1790,7 +1796,7 @@ function refreshUsageIfNeeded(options = {}) {
   const forceReload = Boolean(options.forceReload);
 
   if (!refreshFirestore && !refreshCodex && !refreshStorage && !refreshOpenAI) {
-    return Promise.resolve();
+    return Promise.resolve(false);
   }
   if (!forceReload && usageRefreshInFlight) {
     return usageRefreshInFlight;
@@ -2082,6 +2088,32 @@ function renderList() {
     return wrap;
   }
 
+  function makeMiniSemicircleGauges(items) {
+    const wrap = document.createElement("div");
+    wrap.className = "mt-0.5 flex w-full items-end justify-between gap-1";
+    items.forEach((item) => {
+      const gaugeWrap = document.createElement("div");
+      gaugeWrap.className = "flex min-w-0 flex-1 justify-center";
+      gaugeWrap.title = item.title || "";
+
+      const value = Math.max(0, Math.min(100, Number(item.value || 0)));
+      const radius = 18;
+      const circumference = Math.PI * radius;
+      const fillLength = (value / 100) * circumference;
+      const label = String(item.label || "");
+
+      gaugeWrap.innerHTML = `
+        <svg viewBox="0 0 52 34" class="h-9 w-full overflow-visible">
+          <path d="M8 28 A18 18 0 0 1 44 28" fill="none" stroke="${item.trackColor}" stroke-width="5" stroke-linecap="butt"></path>
+          <path d="M8 28 A18 18 0 0 1 44 28" fill="none" stroke="${item.fillColor}" stroke-width="5" stroke-linecap="butt" stroke-dasharray="${fillLength} ${circumference}"></path>
+          <text x="26" y="32.0" text-anchor="middle" dominant-baseline="ideographic" font-size="14" font-weight="500" fill="#f8fbff">${label}</text>
+        </svg>
+      `;
+      wrap.appendChild(gaugeWrap);
+    });
+    return wrap;
+  }
+
   function makeMiniOpenAICombinedGraph(dailyValues, currentUsd, maxUsd = 5, markerUsd = 3) {
     const wrap = document.createElement("div");
     wrap.className = "mt-0.5 w-full space-y-0.5";
@@ -2161,20 +2193,30 @@ function renderList() {
     title: "Firestore",
     badgeText: state.usageSummary ? `${fsPeak.toFixed(1)}%` : "-",
     badgePressure: fsPeak,
-    graphEl: makeMiniBars(
+    graphEl: makeMiniSemicircleGauges(
       [
-        fsSnapshot.relativePercent.read,
-        fsSnapshot.relativePercent.write,
-        fsSnapshot.relativePercent.delete
-      ],
-      ["bg-[#bfd2ff]", "bg-[#ffd38f]", "bg-[#ffb6cf]"],
-      ["bg-[#8496bb]", "bg-[#917953]", "bg-[#94677b]"],
-      [
-        `read vs14 ${formatPercent(fsSnapshot.relativePercent.read, 1)}`,
-        `write vs14 ${formatPercent(fsSnapshot.relativePercent.write, 1)}`,
-        `delete vs14 ${formatPercent(fsSnapshot.relativePercent.delete, 1)}`
-      ],
-      ["R", "W", "D"]
+        {
+          label: "R",
+          value: fsSnapshot.relativePercent.read,
+          fillColor: "#7fb6f6",
+          trackColor: "#5f7ea3",
+          title: `read vs14 ${formatPercent(fsSnapshot.relativePercent.read, 1)}`
+        },
+        {
+          label: "W",
+          value: fsSnapshot.relativePercent.write,
+          fillColor: "#ffc36f",
+          trackColor: "#8f7650",
+          title: `write vs14 ${formatPercent(fsSnapshot.relativePercent.write, 1)}`
+        },
+        {
+          label: "D",
+          value: fsSnapshot.relativePercent.delete,
+          fillColor: "#ff9bb9",
+          trackColor: "#94677b",
+          title: `delete vs14 ${formatPercent(fsSnapshot.relativePercent.delete, 1)}`
+        }
+      ]
     ),
     summaryHtml: state.usageSummary
       ? `<strong>r${formatPercent(fsSnapshot.ratePercent.read, 1)}</strong> - w${formatPercent(fsSnapshot.ratePercent.write, 1)} - d${formatPercent(fsSnapshot.ratePercent.delete, 1)}`
@@ -2297,7 +2339,7 @@ function renderList() {
     state.usageTileCollapsed = !state.usageTileCollapsed;
     renderList();
     if (!state.usageTileCollapsed) {
-      refreshUsageIfNeeded().catch(() => {});
+      maybeRunAutoRefresh(() => refreshUsageIfNeeded({ autoTriggered: true })).catch(() => {});
     }
   });
   usageTop.appendChild(usageLabel);
@@ -2673,8 +2715,12 @@ async function toggleDeletable(item) {
 }
 
 async function loadMemos(options = {}) {
+  const autoTriggered = Boolean(options.autoTriggered);
+  if (autoTriggered && !state.autoRefreshEnabled) {
+    return false;
+  }
   const forceReload = Boolean(options.forceReload);
-  const usageJob = refreshUsageIfNeeded({ forceReload });
+  const usageJob = refreshUsageIfNeeded({ forceReload, autoTriggered });
 
   try {
     const selectFirst = Boolean(options.selectFirst);
@@ -3156,12 +3202,12 @@ function initEvents() {
   const onFilterEnter = (ev) => {
     if (ev.key === "Enter") {
       ev.preventDefault();
-      loadMemos();
+      maybeRunAutoRefresh(() => loadMemos({ autoTriggered: true }));
     }
   };
   const onFilterCleared = (ev) => {
     if (!String(ev.target.value || "").trim()) {
-      loadMemos();
+      maybeRunAutoRefresh(() => loadMemos({ autoTriggered: true }));
     }
   };
   el.qInput.addEventListener("keydown", onFilterEnter);
@@ -3171,10 +3217,21 @@ function initEvents() {
   // For search clear button (x) behavior on WebKit browsers.
   el.qInput.addEventListener("search", onFilterCleared);
   el.projectInput.addEventListener("search", onFilterCleared);
-  el.typeSelect.addEventListener("change", loadMemos);
+  el.typeSelect.addEventListener("change", () => {
+    maybeRunAutoRefresh(() => loadMemos({ autoTriggered: true }));
+  });
   el.storageFilterSelect.addEventListener("change", () => {
     state.storageFilterKind = currentStorageFilterKind();
-    loadMemos();
+    maybeRunAutoRefresh(() => loadMemos({ autoTriggered: true }));
+  });
+  el.autoRefreshIndicator.addEventListener("click", () => {
+    state.autoRefreshEnabled = !state.autoRefreshEnabled;
+    renderAutoRefreshIndicator();
+    setStatus(
+      state.autoRefreshEnabled ? "Auto refresh ON" : "Auto refresh OFF",
+      false,
+      "force"
+    );
   });
   el.modeBadge.addEventListener("click", showModeLaunchHint);
   el.defaultStorageSelect.addEventListener("change", () => {
@@ -3341,6 +3398,7 @@ initEvents();
 fillEditor(null);
 setBodyMode("preview");
 updateBodyMode();
+renderAutoRefreshIndicator();
 
 async function initApp() {
   try {
