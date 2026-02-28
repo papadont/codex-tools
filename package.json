@@ -7,9 +7,13 @@
   "scripts": {
     "app:build": "apps/codex-tools-menubar/build.sh",
     "app:build:legacy-dual": "apps/legacy-dual-launcher/build.sh",
+    "test": "node --test test/*.test.js",
     "memo:save": "node scripts/save_firestore_memo.js",
     "memo:thread": "node scripts/save_thread_memo.js",
     "memo:web": "node scripts/codex_memo_web_server.js",
+    "memo:web:icloud": "node scripts/codex_memo_web_server.js --storage-mode fixed --adapter icloud",
+    "memo:web:firebase": "node scripts/codex_memo_web_server.js --storage-mode fixed --adapter firebase",
+    "firebase:storage:check": "node scripts/firebase_storage_check.js",
     "memo:pick-handover": "node scripts/pick_handover_memo.js",
     "firestore:usage": "node scripts/firestore_usage_report.js",
     "usage:weekly": "node scripts/collect_weekly_usage.js",

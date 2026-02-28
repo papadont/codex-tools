@@ -2,6 +2,7 @@
 
 const { GoogleAuth } = require("google-auth-library");
 const { parseArgs } = require("./codex_memo_core");
+const { loadEnvFromCandidates } = require("./load_env");
 
 const METRIC_CANDIDATES = {
   read: [
@@ -23,6 +24,8 @@ const DAILY_FREE_TIER_LIMITS = {
   write: 20000,
   delete: 20000
 };
+
+loadEnvFromCandidates();
 
 function usage() {
   console.log(`

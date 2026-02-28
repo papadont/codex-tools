@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 
 const admin = require("firebase-admin");
+const { loadEnvFromCandidates } = require("./load_env");
+const { normalizeAttachments, syncMemoBodyAndAttachments } = require("./memo_sync_service");
+const { normalizeStorageKind } = require("./runtime_config");
 
 const ALLOWED_MEMO_TYPES = new Set(["handover memo", "memo", "propomemo", "keep"]);
 const DEFAULT_SAVE_TIMEOUT_MS = Number(process.env.CODEX_MEMO_SAVE_TIMEOUT_MS || 15000);
+
+loadEnvFromCandidates();
 
 function parseArgs(argv) {
   const parsed = {};
@@ -64,11 +69,19 @@ async function saveMemoRecord(input) {
     memoType: input.memoType.trim(),
     memoBody: input.memoBody.trim(),
     threadTitle: input.threadTitle.trim(),
+    storageKind: normalizeStorageKind(input.storageKind, "firebase"),
+    attachments: normalizeAttachments(input.attachments),
     deletable: boolFromInput(input.deletable, false),
     createdAtISO: now.toISOString(),
     createdBy: input.createdBy || "codex-cli",
     sourceThread: input.sourceThread || `${process.cwd()}`
   };
+  const syncResult = syncMemoBodyAndAttachments({
+    memoBody: payload.memoBody,
+    attachments: payload.attachments
+  });
+  payload.memoBody = syncResult.normalizedBody;
+  payload.attachments = syncResult.attachments;
 
   const db = admin.firestore();
   const savePromise = db.collection("codex-memo").add(payload);

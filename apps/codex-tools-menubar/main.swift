@@ -6,7 +6,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var hushProcess: Process?
   private var memoProcess: Process?
   private var codexResetStatusItem: NSMenuItem!
+  private var memoModeStatusItem: NSMenuItem!
   private var statusTimer: Timer?
+  private var currentMemoLaunchMode = "mixed"
 
   private let homeDir = NSHomeDirectory()
   private lazy var hushDir = "\(homeDir)/Documents/develop/hush-pointer"
@@ -35,9 +37,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     statusItem.button?.title = "[p/m]"
 
     let menu = NSMenu()
+    codexResetStatusItem = NSMenuItem(title: "codex 1w reset: checking...", action: nil, keyEquivalent: "")
+    codexResetStatusItem.isEnabled = false
+    menu.addItem(codexResetStatusItem)
+    memoModeStatusItem = NSMenuItem(title: "memo mode: mixed", action: nil, keyEquivalent: "")
+    memoModeStatusItem.isEnabled = false
+    menu.addItem(memoModeStatusItem)
+    menu.addItem(NSMenuItem.separator())
+    menu.addItem(NSMenuItem(title: "Open hush log", action: #selector(openHushLogAction), keyEquivalent: "1"))
+    menu.addItem(NSMenuItem(title: "Open memo log", action: #selector(openMemoLogAction), keyEquivalent: "2"))
+    menu.addItem(NSMenuItem.separator())
     menu.addItem(NSMenuItem(title: "Restart Both", action: #selector(restartBothAction), keyEquivalent: "r"))
     menu.addItem(NSMenuItem(title: "Restart hush-pointer", action: #selector(restartHushAction), keyEquivalent: "h"))
-    menu.addItem(NSMenuItem(title: "Restart codex-memo", action: #selector(restartMemoAction), keyEquivalent: "m"))
+    menu.addItem(NSMenuItem(title: "Restart codex-memo (Mixed)", action: #selector(restartMemoMixedAction), keyEquivalent: "m"))
+    menu.addItem(NSMenuItem(title: "Restart codex-memo (iCloud)", action: #selector(restartMemoICloudAction), keyEquivalent: "i"))
+    menu.addItem(NSMenuItem(title: "Restart codex-memo (Firestore)", action: #selector(restartMemoFirestoreAction), keyEquivalent: "f"))
     menu.addItem(NSMenuItem.separator())
     menu.addItem(NSMenuItem(title: "Stop Both", action: #selector(stopBothAction), keyEquivalent: "s"))
     menu.addItem(NSMenuItem(title: "Stop hush-pointer", action: #selector(stopHushAction), keyEquivalent: "x"))
@@ -46,13 +60,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     menu.addItem(NSMenuItem(title: "Open Both in Browser", action: #selector(openBothInBrowserAction), keyEquivalent: "o"))
     menu.addItem(NSMenuItem(title: "Open hush in Browser", action: #selector(openHushInBrowserAction), keyEquivalent: "u"))
     menu.addItem(NSMenuItem(title: "Open memo in Browser", action: #selector(openMemoInBrowserAction), keyEquivalent: "i"))
-    menu.addItem(NSMenuItem.separator())
-    menu.addItem(NSMenuItem(title: "Open hush log", action: #selector(openHushLogAction), keyEquivalent: "1"))
-    menu.addItem(NSMenuItem(title: "Open memo log", action: #selector(openMemoLogAction), keyEquivalent: "2"))
-    menu.addItem(NSMenuItem.separator())
-    codexResetStatusItem = NSMenuItem(title: "codex 1w reset: checking...", action: nil, keyEquivalent: "")
-    codexResetStatusItem.isEnabled = false
-    menu.addItem(codexResetStatusItem)
     menu.addItem(NSMenuItem.separator())
     menu.addItem(NSMenuItem(title: "Quit", action: #selector(quitAction), keyEquivalent: "q"))
 
@@ -65,7 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @objc private func restartBothAction() { restartBoth() }
   @objc private func restartHushAction() { restartHush() }
-  @objc private func restartMemoAction() { restartMemo() }
+  @objc private func restartMemoMixedAction() { restartMemo(mode: "mixed") }
+  @objc private func restartMemoICloudAction() { restartMemo(mode: "icloud") }
+  @objc private func restartMemoFirestoreAction() { restartMemo(mode: "firebase") }
   @objc private func stopBothAction() {
     stopBoth()
     updateStatusItems()
@@ -113,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func restartBoth() {
     restartHush()
-    restartMemo()
+    restartMemo(mode: "mixed")
     updateStatusItems()
   }
 
@@ -125,12 +134,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     updateStatusItems()
   }
 
-  private func restartMemo() {
+  private func restartMemo(mode: String) {
     runShell("pkill -f 'node .*scripts/codex_memo_web_server\\.js' || true")
     runShell("pkill -f \(shellQuote("\(regexEscape(codexToolsDir)).*npm run memo:web")) || true")
     memoProcess?.terminate()
-    memoProcess = launchShell("export GOOGLE_APPLICATION_CREDENTIALS=\(shellQuote(credentialsPath)); cd \(shellQuote(codexToolsDir)) && npm run memo:web >> \(shellQuote(memoLogPath)) 2>&1")
+    currentMemoLaunchMode = mode
+    let memoCommand = memoLaunchCommand(for: mode)
+    memoProcess = launchShell("export GOOGLE_APPLICATION_CREDENTIALS=\(shellQuote(credentialsPath)); cd \(shellQuote(codexToolsDir)) && \(memoCommand) >> \(shellQuote(memoLogPath)) 2>&1")
     updateStatusItems()
+  }
+
+  private func memoLaunchCommand(for mode: String) -> String {
+    switch mode {
+    case "icloud":
+      return "npm run memo:web:icloud"
+    case "firebase":
+      return "npm run memo:web:firebase"
+    default:
+      return "npm run memo:web"
+    }
   }
 
   private func stopBoth() {
@@ -181,11 +203,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func updateStatusItems() {
     let hushRunning = isHushRunning()
     let memoRunning = isMemoRunning()
+    memoModeStatusItem?.title = "memo mode: \(displayMemoMode(currentMemoLaunchMode))"
     codexResetStatusItem?.title = "codex 1w reset: \(readCodexWeeklyResetText())"
 
     let pChar = hushRunning ? "P" : "p"
     let mChar = memoRunning ? "M" : "m"
     statusItem.button?.title = "\(pChar)/\(mChar)"
+  }
+
+  private func displayMemoMode(_ mode: String) -> String {
+    switch mode {
+    case "icloud":
+      return "iCloud"
+    case "firebase":
+      return "Firestore"
+    default:
+      return "Mixed"
+    }
   }
 
   private func readCodexWeeklyResetText() -> String {

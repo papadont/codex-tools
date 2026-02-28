@@ -7,60 +7,11 @@ const { spawn } = require("child_process");
 const express = require("express");
 const admin = require("firebase-admin");
 const { GoogleAuth } = require("google-auth-library");
-
-function stripMatchingQuotes(value) {
-  if (value.length >= 2) {
-    const first = value[0];
-    const last = value[value.length - 1];
-    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-      return value.slice(1, -1);
-    }
-  }
-  return value;
-}
-
-function loadEnvFile(filePath) {
-  let raw;
-  try {
-    raw = fs.readFileSync(filePath, "utf8");
-  } catch {
-    return false;
-  }
-
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-
-    const normalized = trimmed.startsWith("export ") ? trimmed.slice(7).trim() : trimmed;
-    const eqIndex = normalized.indexOf("=");
-    if (eqIndex <= 0) continue;
-
-    const key = normalized.slice(0, eqIndex).trim();
-    if (!key || process.env[key] !== undefined) continue;
-
-    let value = normalized.slice(eqIndex + 1).trim();
-    const hashIndex = value.indexOf(" #");
-    if (hashIndex >= 0) value = value.slice(0, hashIndex).trim();
-    process.env[key] = stripMatchingQuotes(value);
-  }
-
-  return true;
-}
-
-function loadEnvFromCandidates() {
-  const envCandidates = [
-    path.join(process.cwd(), ".env"),
-    path.join(os.homedir(), ".config", "codex-tools", ".env"),
-    path.join(os.homedir(), ".codex-tools.env")
-  ];
-
-  for (const filePath of envCandidates) {
-    if (fs.existsSync(filePath) && loadEnvFile(filePath)) {
-      return filePath;
-    }
-  }
-  return "";
-}
+const { createAdapterRegistry } = require("./adapter_registry");
+const { loadEnvFromCandidates } = require("./load_env");
+const { createMemoService } = require("./memo_service");
+const { normalizeAttachments } = require("./memo_sync_service");
+const { normalizeStorageKind, resolveRuntimeConfig } = require("./runtime_config");
 
 loadEnvFromCandidates();
 
@@ -95,6 +46,7 @@ const DAILY_FREE_TIER_LIMITS = {
 };
 
 const cacheStore = new Map();
+const runtimeConfig = resolveRuntimeConfig(process.argv.slice(2), process.env);
 
 function getCache(key) {
   const entry = cacheStore.get(key);
@@ -389,9 +341,11 @@ async function getCodexUsagePayload() {
 
 function initFirestore() {
   requireCredentials();
+  const storageBucket = process.env.CODEX_MEMO_FIREBASE_BUCKET || undefined;
   if (!admin.apps.length) {
     admin.initializeApp({
-      credential: admin.credential.applicationDefault()
+      credential: admin.credential.applicationDefault(),
+      storageBucket
     });
   }
   return admin.firestore();
@@ -425,6 +379,20 @@ function normalizeBool(raw, defaultValue = false) {
   throw new Error("Invalid boolean. Use true/false.");
 }
 
+function normalizeAttachmentsInput(raw) {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error("attachments must be an array.");
+  }
+  return normalizeAttachments(raw).map((item) => {
+    const next = { ...item };
+    if (next.dataUrl && !/^data:[^;,]+;base64,/.test(next.dataUrl)) {
+      throw new Error(`Invalid dataUrl for attachment ${next.id}.`);
+    }
+    return next;
+  });
+}
+
 function assertExclusiveFlags(pinned, deletable) {
   if (Boolean(pinned) && Boolean(deletable)) {
     throw new Error("pinned and deletable cannot both be true.");
@@ -448,12 +416,20 @@ function toMemoDto(doc) {
   const datetime = data.datetime && typeof data.datetime.toDate === "function"
     ? data.datetime.toDate()
     : null;
+  let storageKind;
+  try {
+    storageKind = normalizeStorageKind(data.storageKind, "firebase");
+  } catch (_error) {
+    storageKind = String(data.storageKind || "firebase").trim().toLowerCase() || "firebase";
+  }
   return {
     id: doc.id,
     projectName: data.projectName || "",
     memoType: data.memoType || "memo",
     memoBody: data.memoBody || "",
     threadTitle: data.threadTitle || "",
+    storageKind,
+    attachments: normalizeAttachments(data.attachments),
     deletable: Boolean(data.deletable),
     pinned: Boolean(data.pinned),
     createdAtISO: data.createdAtISO || (datetime ? datetime.toISOString() : null),
@@ -462,6 +438,16 @@ function toMemoDto(doc) {
     sourceThread: data.sourceThread || "",
     datetimeISO: datetime ? datetime.toISOString() : null
   };
+}
+
+function getAdapterRuntimeDetails(adapterRegistry) {
+  return runtimeConfig.availableAdapters.map((kind) => {
+    const adapter = adapterRegistry.getAdapter(kind);
+    return {
+      kind,
+      path: adapter.baseDir || (kind === "firebase" ? `Cloud Storage bucket: ${adapter.bucketName || "-"}` : "")
+    };
+  });
 }
 
 function buildDownloadBody(memo, format) {
@@ -476,6 +462,7 @@ function buildDownloadBody(memo, format) {
       `- id: ${memo.id}`,
       `- projectName: ${memo.projectName}`,
       `- memoType: ${memo.memoType}`,
+      `- storageKind: ${memo.storageKind || "firebase"}`,
       `- deletable: ${memo.deletable}`,
       `- createdAtISO: ${memo.createdAtISO || ""}`,
       `- updatedAtISO: ${memo.updatedAtISO || ""}`,
@@ -491,6 +478,7 @@ function buildDownloadBody(memo, format) {
     `id: ${memo.id}`,
     `projectName: ${memo.projectName}`,
     `memoType: ${memo.memoType}`,
+    `storageKind: ${memo.storageKind || "firebase"}`,
     `deletable: ${memo.deletable}`,
     `createdAtISO: ${memo.createdAtISO || ""}`,
     `updatedAtISO: ${memo.updatedAtISO || ""}`,
@@ -818,13 +806,39 @@ async function summarizeMemoWithOpenAI({ threadTitle, memoBody }) {
 
 async function main() {
   const db = initFirestore();
+  if (runtimeConfig.allowedAdapters.includes("firebase") && !process.env.CODEX_MEMO_FIREBASE_BUCKET) {
+    throw new Error("CODEX_MEMO_FIREBASE_BUCKET is not set.");
+  }
+  const adapterRegistry = createAdapterRegistry({
+    firebase: {
+      db,
+      collection: COLLECTION,
+      admin,
+      bucketName: process.env.CODEX_MEMO_FIREBASE_BUCKET || ""
+    }
+  });
+  const memoService = createMemoService({
+    db,
+    collection: COLLECTION,
+    runtimeConfig,
+    adapterRegistry,
+    admin,
+    toMemoDto
+  });
   const app = express();
 
-  app.use(express.json({ limit: "1mb" }));
+  app.use(express.json({ limit: "15mb" }));
   app.use(express.static(path.join(__dirname, "..", "codex-memo-web", "public")));
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true });
+  });
+
+  app.get("/api/runtime-config", (_req, res) => {
+    res.json({
+      ...runtimeConfig,
+      adapterDetails: getAdapterRuntimeDetails(adapterRegistry)
+    });
   });
 
   app.get("/api/memos", async (req, res) => {
@@ -832,9 +846,10 @@ async function main() {
       const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
       const projectName = String(req.query.projectName || "").trim().toLowerCase();
       const memoType = String(req.query.memoType || "").trim().toLowerCase();
+      const storageKind = String(req.query.storageKind || "").trim().toLowerCase();
       const q = String(req.query.q || "").trim().toLowerCase();
       const noCache = String(req.query.nocache || "").trim() === "1";
-      const cacheKey = `list:${JSON.stringify({ limit, projectName, memoType, q })}`;
+      const cacheKey = `list:${JSON.stringify({ limit, projectName, memoType, storageKind, q, allowedAdapters: runtimeConfig.allowedAdapters })}`;
       if (!noCache) {
         const cached = getCache(cacheKey);
         if (cached) {
@@ -844,19 +859,16 @@ async function main() {
         }
       }
 
-      // Avoid excluding legacy docs that do not have the "datetime" field.
-      const snap = await db
-        .collection(COLLECTION)
-        .limit(limit)
-        .get();
-
-      let memos = snap.docs.map(toMemoDto);
+      let memos = await memoService.listMemos(limit);
 
       if (projectName) {
         memos = memos.filter((memo) => memo.projectName.toLowerCase().includes(projectName));
       }
       if (memoType) {
         memos = memos.filter((memo) => memo.memoType.toLowerCase() === memoType);
+      }
+      if (storageKind) {
+        memos = memos.filter((memo) => memo.storageKind.toLowerCase() === storageKind);
       }
       if (q) {
         memos = memos.filter((memo) => {
@@ -946,12 +958,12 @@ async function main() {
         return;
       }
 
-      const doc = await db.collection(COLLECTION).doc(req.params.id).get();
-      if (!doc.exists) {
+      const item = await memoService.getMemo(req.params.id);
+      if (!item) {
         res.status(404).json({ error: "Memo not found." });
         return;
       }
-      const payload = { item: toMemoDto(doc) };
+      const payload = { item };
       setCache(cacheKey, payload);
       res.setHeader("X-Cache", "MISS");
       res.json(payload);
@@ -962,7 +974,6 @@ async function main() {
 
   app.post("/api/memos", async (req, res) => {
     try {
-      const now = new Date();
       const payload = {
         projectName: normalizeString(req.body.projectName, "projectName"),
         memoType: normalizeMemoType(req.body.memoType),
@@ -970,18 +981,15 @@ async function main() {
         threadTitle: normalizeString(req.body.threadTitle, "threadTitle"),
         deletable: normalizeBool(req.body.deletable, false),
         pinned: normalizeBool(req.body.pinned, false),
-        datetime: admin.firestore.Timestamp.fromDate(now),
-        createdAtISO: now.toISOString(),
-        updatedAtISO: now.toISOString(),
+        storageKind: req.body.storageKind,
+        attachments: normalizeAttachmentsInput(req.body.attachments),
         createdBy: req.body.createdBy || "codex-memo-web",
         sourceThread: req.body.sourceThread || process.cwd()
       };
       assertExclusiveFlags(payload.pinned, payload.deletable);
-
-      const ref = await db.collection(COLLECTION).add(payload);
-      const created = await ref.get();
+      const created = await memoService.createMemo(payload);
       clearCache();
-      res.status(201).json({ item: toMemoDto(created) });
+      res.status(201).json({ item: created });
     } catch (error) {
       res.status(400).json({ error: error.message || "Failed to create memo." });
     }
@@ -1001,7 +1009,8 @@ async function main() {
         memoType: normalizeMemoType(req.body.memoType),
         memoBody: normalizeString(req.body.memoBody, "memoBody"),
         threadTitle: normalizeString(req.body.threadTitle, "threadTitle"),
-        updatedAtISO: new Date().toISOString()
+        storageKind: req.body.storageKind,
+        attachments: req.body.attachments === undefined ? undefined : normalizeAttachmentsInput(req.body.attachments)
       };
       if (req.body.deletable !== undefined) {
         patch.deletable = normalizeBool(req.body.deletable, false);
@@ -1015,10 +1024,9 @@ async function main() {
       const nextDeletable = patch.deletable !== undefined ? patch.deletable : Boolean(current.deletable);
       assertExclusiveFlags(nextPinned, nextDeletable);
 
-      await ref.update(patch);
-      const updated = await ref.get();
+      const updated = await memoService.updateMemo(req.params.id, patch);
       clearCache();
-      res.json({ item: toMemoDto(updated) });
+      res.json({ item: updated });
     } catch (error) {
       res.status(400).json({ error: error.message || "Failed to update memo." });
     }
@@ -1033,13 +1041,55 @@ async function main() {
         return;
       }
       const current = exists.data() || {};
+      memoService.assertAllowedStorageKind(normalizeStorageKind(current.storageKind, "firebase"));
       const confirmToken = req.get("x-codex-delete-confirm") || req.query.confirm;
       assertDeleteAllowed(current, confirmToken);
-      await ref.delete();
+      await memoService.deleteMemo(req.params.id);
       clearCache();
       res.json({ ok: true });
     } catch (error) {
       res.status(400).json({ error: error.message || "Failed to delete memo." });
+    }
+  });
+
+  app.get("/api/memos/:id/attachments/:attachmentId", async (req, res) => {
+    try {
+      const memo = await memoService.getMemo(req.params.id);
+      if (!memo) {
+        res.status(404).json({ error: "Memo not found." });
+        return;
+      }
+      const attachment = (memo.attachments || []).find((item) => item.id === req.params.attachmentId);
+      if (!attachment) {
+        res.status(404).json({ error: "Attachment not found." });
+        return;
+      }
+
+      const adapter = adapterRegistry.getAdapter(memo.storageKind);
+      const resolved = await adapter.resolveAttachmentUrl({
+        memoId: memo.id,
+        attachmentId: attachment.id,
+        attachment
+      });
+      if (!resolved) {
+        res.status(404).json({ error: "Attachment file not found." });
+        return;
+      }
+      if (/^https?:\/\//i.test(resolved)) {
+        res.redirect(resolved);
+        return;
+      }
+      if (!path.isAbsolute(resolved) || !fs.existsSync(resolved)) {
+        res.status(404).json({ error: "Attachment file not found." });
+        return;
+      }
+
+      if (attachment.mimeType) {
+        res.type(attachment.mimeType);
+      }
+      res.sendFile(resolved);
+    } catch (error) {
+      res.status(500).json({ error: error.message || "Failed to load attachment." });
     }
   });
 
@@ -1054,6 +1104,7 @@ async function main() {
 
       const pinned = normalizeBool(req.body.pinned, false);
       const current = exists.data() || {};
+      memoService.assertAllowedStorageKind(normalizeStorageKind(current.storageKind, "firebase"));
       assertExclusiveFlags(pinned, Boolean(current.deletable));
       await ref.update({
         pinned,
@@ -1078,6 +1129,7 @@ async function main() {
 
       const deletable = normalizeBool(req.body.deletable, false);
       const current = exists.data() || {};
+      memoService.assertAllowedStorageKind(normalizeStorageKind(current.storageKind, "firebase"));
       assertExclusiveFlags(Boolean(current.pinned), deletable);
       await ref.update({
         deletable,
@@ -1099,13 +1151,11 @@ async function main() {
         return;
       }
 
-      const doc = await db.collection(COLLECTION).doc(req.params.id).get();
-      if (!doc.exists) {
+      const memo = await memoService.getMemo(req.params.id);
+      if (!memo) {
         res.status(404).json({ error: "Memo not found." });
         return;
       }
-
-      const memo = toMemoDto(doc);
       const body = buildDownloadBody(memo, format);
       const safeTitle = (memo.threadTitle || memo.id).replace(/[^\w\-]+/g, "_").slice(0, 50);
       const filename = `${safeTitle || memo.id}.${format}`;
@@ -1173,7 +1223,10 @@ async function main() {
   });
 
   app.listen(PORT, () => {
-    console.log(`codex-memo web app running: http://localhost:${PORT}`);
+    const modeText = runtimeConfig.storageMode === "fixed"
+      ? `fixed:${runtimeConfig.fixedAdapter}`
+      : "mixed";
+    console.log(`codex-memo web app running: http://localhost:${PORT} [${modeText}]`);
   });
 }
 

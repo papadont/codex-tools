@@ -1,5 +1,7 @@
 # AGENTS
 
+日本語で回答。
+
 ## Thread Operation Rule
 - When context usage seems to exceed roughly half, output the following simultaneously in this order:
   1. A short half-usage notification.

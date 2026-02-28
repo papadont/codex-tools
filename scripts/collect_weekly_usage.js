@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { GoogleAuth } = require("google-auth-library");
+const { loadEnvFromCandidates } = require("./load_env");
 
 const CODEX_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
 const OUT_DIR = path.join(process.cwd(), "dist", "usage-reports", "weekly");
@@ -29,6 +30,8 @@ const DAILY_FREE_TIER_LIMITS = {
   write: 20_000,
   delete: 20_000
 };
+
+loadEnvFromCandidates();
 
 function requireCredentials() {
   if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {

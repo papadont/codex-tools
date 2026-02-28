@@ -213,6 +213,16 @@
       n.style.borderRadius = theme.blockquote.borderRadius;
     });
 
+    forEach(root, "img", (n) => applyStyles(n, {
+      display: "block",
+      maxWidth: "100%",
+      height: "auto",
+      margin: "0.7em 0",
+      border: "1px solid rgba(91, 105, 129, 0.12)",
+      borderRadius: "8px",
+      cursor: "zoom-in"
+    }));
+
     forEach(root, "pre", (n) => { n.style.margin = theme.code.block.margin; });
     forEach(root, "p + ul, p + ol, p + table, p + blockquote, p + pre", (n) => {
       n.style.marginTop = theme.list.afterParagraphTop;

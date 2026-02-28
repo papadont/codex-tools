@@ -3,10 +3,13 @@
 const fs = require("fs");
 const path = require("path");
 const { saveMemoRecord } = require("./codex_memo_core");
+const { loadEnvFromCandidates } = require("./load_env");
 
 const LATEST_PATH = path.join(process.cwd(), "dist", "usage-reports", "weekly", "latest.json");
 const STATE_PATH = path.join(process.cwd(), "dist", "usage-reports", "weekly", ".memo-trigger-state.json");
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
+
+loadEnvFromCandidates();
 
 function formatDate(value) {
   if (!value) return "-";

@@ -1,11 +1,21 @@
 const state = {
   items: [],
   selectedId: null,
+  runtimeConfig: {
+    storageMode: "mixed",
+    fixedAdapter: null,
+    defaultStorageKind: "firebase",
+    availableAdapters: ["icloud", "firebase"],
+    allowedAdapters: ["icloud", "firebase"],
+    adapterDetails: []
+  },
   editorBaseline: null,
+  editorStorageKind: "firebase",
   hasInitialAutoSelection: false,
   lastResponseCacheHit: false,
   selectedCacheHit: false,
   showOnlyDeletable: false,
+  storageFilterKind: "",
   usageTileCollapsed: false,
   codexUsageSummary: null,
   codexUsageError: "",
@@ -17,6 +27,7 @@ const state = {
   usageOverviewAiSummaryModel: "",
   usageOverviewAiSummaryError: "",
   usageOverviewAiSummaryKey: "",
+  editorAttachments: [],
   pointerClientX: 0,
   pointerClientY: 0
 };
@@ -33,6 +44,7 @@ const CODEX_USAGE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
 let usageRefreshInFlight = null;
 let usageOverviewSummaryInFlight = null;
+let attachmentLightbox = null;
 
 function usageSourceFooterLines() {
   return [
@@ -47,10 +59,21 @@ const el = {
   qInput: document.getElementById("qInput"),
   projectInput: document.getElementById("projectInput"),
   typeSelect: document.getElementById("typeSelect"),
+  storageFilterWrap: document.getElementById("storageFilterWrap"),
+  storageFilterSelect: document.getElementById("storageFilterSelect"),
+  modeBadge: document.getElementById("modeBadge"),
+  defaultStorageWrap: document.getElementById("defaultStorageWrap"),
+  defaultStorageSelect: document.getElementById("defaultStorageSelect"),
+  editStorageWrap: document.getElementById("editStorageWrap"),
+  editStorageSelect: document.getElementById("editStorageSelect"),
   newBtn: document.getElementById("newBtn"),
   projectNameInput: document.getElementById("projectNameInput"),
   memoTypeInput: document.getElementById("memoTypeInput"),
   threadTitleInput: document.getElementById("threadTitleInput"),
+  addImageBtn: document.getElementById("addImageBtn"),
+  attachmentInput: document.getElementById("attachmentInput"),
+  attachmentList: document.getElementById("attachmentList"),
+  storageInfo: document.getElementById("storageInfo"),
   bodyModeToggle: document.getElementById("bodyModeToggle"),
   memoBodyInput: document.getElementById("memoBodyInput"),
   memoPreview: document.getElementById("memoPreview"),
@@ -76,6 +99,23 @@ async function request(path, options) {
     throw new Error(body.error || `HTTP ${res.status}`);
   }
   return body;
+}
+
+async function loadRuntimeConfig() {
+  const data = await request("/api/runtime-config");
+  state.runtimeConfig = {
+    storageMode: data.storageMode || "mixed",
+    fixedAdapter: data.fixedAdapter || null,
+    defaultStorageKind: normalizeStorageKind(data.defaultStorageKind, "firebase"),
+    availableAdapters: Array.isArray(data.availableAdapters) && data.availableAdapters.length
+      ? data.availableAdapters.map((item) => normalizeStorageKind(item))
+      : ["icloud", "firebase"],
+    allowedAdapters: Array.isArray(data.allowedAdapters) && data.allowedAdapters.length
+      ? data.allowedAdapters.map((item) => normalizeStorageKind(item))
+      : ["icloud", "firebase"],
+    adapterDetails: Array.isArray(data.adapterDetails) ? data.adapterDetails : []
+  };
+  renderStorageControls();
 }
 
 function setStatus(message, isError = false, tone = "default") {
@@ -179,6 +219,406 @@ function formatDate(value) {
   const mi = pad2(date.getMinutes());
   const ss = pad2(date.getSeconds());
   return `${yyyy}/${mm}/${dd} ${hh}:${mi}:${ss}`;
+}
+
+function normalizeStorageKind(value, fallback = "firebase") {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  const raw = String(value).trim().toLowerCase();
+  return raw || fallback;
+}
+
+function displayStorageKindLabel(value) {
+  switch (normalizeStorageKind(value)) {
+    case "icloud":
+      return "iCloud";
+    default:
+      return "Firestore";
+  }
+}
+
+function storageBadgeText(value) {
+  switch (normalizeStorageKind(value)) {
+    case "icloud":
+      return "iCL";
+    default:
+      return "FB";
+  }
+}
+
+function storageBadgeClass(value) {
+  switch (normalizeStorageKind(value)) {
+    case "icloud":
+      return "border-[#c8d8ee] bg-[#edf5ff] text-[#5773a0]";
+    default:
+      return "border-[#f0d4b2] bg-[#fbf2e6] text-[#92633c]";
+  }
+}
+
+function modeBadgeClass(value, storageMode = "mixed") {
+  if (storageMode !== "fixed") {
+    return {
+      border: "border-[#b7aeca]",
+      bg: "bg-transparent",
+      text: "text-[#8a5f74]"
+    };
+  }
+  switch (normalizeStorageKind(value)) {
+    case "icloud":
+      return {
+        border: "border-[#bdd1e8]",
+        bg: "bg-transparent",
+        text: "text-[#5678a3]"
+      };
+    default:
+      return {
+        border: "border-[#d6c3ac]",
+        bg: "bg-transparent",
+        text: "text-[#8b6644]"
+      };
+  }
+}
+
+function currentRuntimeConfig() {
+  return state.runtimeConfig || {
+    storageMode: "mixed",
+    fixedAdapter: null,
+    defaultStorageKind: "firebase",
+    availableAdapters: ["icloud", "firebase"],
+    allowedAdapters: ["icloud", "firebase"],
+    adapterDetails: []
+  };
+}
+
+function currentAllowedAdapters() {
+  return currentRuntimeConfig().allowedAdapters || ["icloud", "firebase"];
+}
+
+function storagePathFor(kind) {
+  const details = currentRuntimeConfig().adapterDetails || [];
+  const found = details.find((item) => normalizeStorageKind(item.kind) === normalizeStorageKind(kind));
+  return found?.path || "";
+}
+
+function currentDefaultStorageKind() {
+  return normalizeStorageKind(currentRuntimeConfig().defaultStorageKind, "firebase");
+}
+
+function selectedDefaultStorageKind() {
+  return normalizeStorageKind(el.defaultStorageSelect?.value || currentDefaultStorageKind(), currentDefaultStorageKind());
+}
+
+function currentEditingStorageKind() {
+  return normalizeStorageKind(state.editorStorageKind, currentDefaultStorageKind());
+}
+
+function setEditorStorageKind(value) {
+  state.editorStorageKind = normalizeStorageKind(value, currentDefaultStorageKind());
+}
+
+function currentEditableStorageOptions() {
+  return currentAllowedAdapters().filter((kind) => kind === "icloud" || kind === "firebase");
+}
+
+function currentStorageFilterKind() {
+  if (el.storageFilterSelect) {
+    return normalizeStorageKind(el.storageFilterSelect.value, "");
+  }
+  return normalizeStorageKind(state.storageFilterKind || "", "");
+}
+
+function generateAttachmentId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return `att_${window.crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  }
+  return `att_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function attachmentRoute(memoId, attachmentId) {
+  return `/api/memos/${encodeURIComponent(memoId)}/attachments/${encodeURIComponent(attachmentId)}`;
+}
+
+function normalizeEditorAttachment(item) {
+  if (!item || typeof item !== "object" || !item.id) return null;
+  return {
+    id: String(item.id),
+    kind: item.kind || "image",
+    fileName: item.fileName ? String(item.fileName) : "",
+    mimeType: item.mimeType || "application/octet-stream",
+    size: Number(item.size || 0),
+    caption: item.caption ? String(item.caption) : "",
+    width: item.width === undefined ? undefined : Number(item.width),
+    height: item.height === undefined ? undefined : Number(item.height),
+    storagePath: item.storagePath ? String(item.storagePath) : "",
+    previewUrl: item.previewUrl ? String(item.previewUrl) : "",
+    dataUrl: item.dataUrl ? String(item.dataUrl) : "",
+    createdAtISO: item.createdAtISO ? String(item.createdAtISO) : new Date().toISOString()
+  };
+}
+
+function normalizeEditorAttachments(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(normalizeEditorAttachment).filter(Boolean);
+}
+
+function currentEditorAttachments() {
+  return normalizeEditorAttachments(state.editorAttachments);
+}
+
+function attachmentPreviewUrl(item) {
+  if (!item) return "";
+  if (item.dataUrl) return item.dataUrl;
+  if (item.previewUrl) return item.previewUrl;
+  if (state.selectedId && !isSpecialPanelId(state.selectedId)) {
+    return attachmentRoute(state.selectedId, item.id);
+  }
+  return "";
+}
+
+function attachmentsSnapshotValue() {
+  return JSON.stringify(
+    currentEditorAttachments().map((item) => ({
+      id: item.id,
+      fileName: item.fileName || "",
+      mimeType: item.mimeType || "",
+      size: Number(item.size || 0),
+      caption: item.caption || "",
+      width: item.width === undefined ? null : Number(item.width),
+      height: item.height === undefined ? null : Number(item.height),
+      storagePath: item.storagePath || "",
+      hasDataUrl: Boolean(item.dataUrl)
+    }))
+  );
+}
+
+function formatAttachmentSize(size) {
+  const value = Number(size || 0);
+  if (!Number.isFinite(value) || value <= 0) return "-";
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)}MB`;
+  if (value >= 1024) return `${Math.max(1, Math.round(value / 1024))}KB`;
+  return `${Math.max(1, Math.round(value))}B`;
+}
+
+function attachmentStorageLabel(item) {
+  if (item?.storagePath && /^memos\//.test(String(item.storagePath))) {
+    return displayStorageKindLabel("firebase");
+  }
+  if (item?.storagePath && /^\/(?:Users|tmp|var)\//.test(String(item.storagePath))) {
+    return displayStorageKindLabel("icloud");
+  }
+  return displayStorageKindLabel(currentEditingStorageKind());
+}
+
+function attachmentTooltipText(item) {
+  return [
+    item.fileName || item.id,
+    item.width && item.height ? `${item.width}x${item.height}` : "",
+    formatAttachmentSize(item.size),
+    attachmentStorageLabel(item)
+  ].filter(Boolean).join(" / ");
+}
+
+function bodyContainsAttachment(attachmentId) {
+  const escapedId = String(attachmentId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`!\\[[^\\]]*\\]\\(attachment:\\/\\/${escapedId}\\)`);
+  return pattern.test(String(el.memoBodyInput.value || ""));
+}
+
+function renderAttachmentList() {
+  if (!el.attachmentList) return;
+  const attachments = currentEditorAttachments();
+  el.attachmentList.innerHTML = "";
+  if (!attachments.length) {
+    el.attachmentList.classList.add("hidden");
+    return;
+  }
+  el.attachmentList.classList.remove("hidden");
+
+  attachments.forEach((item) => {
+    const chip = document.createElement("div");
+    chip.className = "inline-flex max-w-full items-center gap-0.5 rounded-md border border-[#e6dfd5] bg-[#fffefd] px-1 py-0.5 text-[10px] leading-none text-[#5e6f8d]";
+    chip.title = attachmentTooltipText(item);
+
+    const thumbUrl = attachmentPreviewUrl(item);
+    if (thumbUrl) {
+      const thumb = document.createElement("img");
+      thumb.src = thumbUrl;
+      thumb.alt = item.caption || item.fileName || item.id;
+      thumb.className = "h-3.5 w-3.5 rounded-[3px] object-cover";
+      thumb.title = chip.title;
+      chip.appendChild(thumb);
+    }
+
+    const label = document.createElement("span");
+    label.className = "max-w-[110px] truncate leading-none";
+    label.textContent = item.fileName || item.caption || item.id;
+    label.title = chip.title;
+    chip.appendChild(label);
+
+    const insertBtn = document.createElement("button");
+    insertBtn.type = "button";
+    insertBtn.className = "inline-flex h-4 w-4 items-center justify-center rounded text-[#6f7f9b] hover:text-[#5a6f94]";
+    insertBtn.textContent = "+";
+    insertBtn.title = bodyContainsAttachment(item.id) ? "Image already inserted" : "Insert image into body";
+    insertBtn.disabled = isReadOnlyPanelSelected();
+    insertBtn.addEventListener("click", () => {
+      insertAttachmentMarkdown(item);
+      updateSaveButtonState();
+      renderAttachmentList();
+      if (getBodyMode() === "preview") {
+        renderMarkdownPreview();
+      }
+      el.memoBodyInput.focus();
+      setStatus(`Inserted image: ${item.fileName || item.id}`);
+    });
+    chip.appendChild(insertBtn);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "inline-flex h-4 w-4 items-center justify-center rounded text-[#9c6b7e] hover:text-[#cf7896]";
+    removeBtn.textContent = "x";
+    removeBtn.title = "Remove image";
+    removeBtn.disabled = isReadOnlyPanelSelected();
+    removeBtn.addEventListener("click", () => {
+      state.editorAttachments = currentEditorAttachments().filter((attachment) => attachment.id !== item.id);
+      removeAttachmentMarkdown(item.id);
+      updateSaveButtonState();
+      renderAttachmentList();
+      if (getBodyMode() === "preview") {
+        renderMarkdownPreview();
+      }
+      setStatus(`Removed image: ${item.fileName || item.id}`);
+    });
+    chip.appendChild(removeBtn);
+    el.attachmentList.appendChild(chip);
+  });
+}
+
+function insertAttachmentMarkdown(item) {
+  const token = `![${item.caption || item.fileName || item.id}](attachment://${item.id})`;
+  if (bodyContainsAttachment(item.id)) return;
+  const input = el.memoBodyInput;
+  const start = Number.isInteger(input.selectionStart) ? input.selectionStart : input.value.length;
+  const end = Number.isInteger(input.selectionEnd) ? input.selectionEnd : input.value.length;
+  const before = input.value.slice(0, start);
+  const after = input.value.slice(end);
+  const joinBefore = before && !before.endsWith("\n") ? "\n" : "";
+  const joinAfter = after && !after.startsWith("\n") ? "\n" : "";
+  input.value = `${before}${joinBefore}${token}${joinAfter}${after}`;
+  const cursor = before.length + joinBefore.length + token.length;
+  input.selectionStart = cursor;
+  input.selectionEnd = cursor;
+}
+
+function removeAttachmentMarkdown(attachmentId) {
+  const escapedId = String(attachmentId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`!?\\[[^\\]]*\\]\\(attachment:\\/\\/${escapedId}\\)\\n?`, "g");
+  el.memoBodyInput.value = String(el.memoBodyInput.value || "").replace(pattern, "").replace(/\n{3,}/g, "\n\n");
+}
+
+function loadImageDimensions(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ width: img.naturalWidth || undefined, height: img.naturalHeight || undefined });
+    img.onerror = () => resolve({ width: undefined, height: undefined });
+    img.src = dataUrl;
+  });
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addImageFiles(fileList) {
+  const files = Array.from(fileList || []).filter((file) => String(file.type || "").startsWith("image/"));
+  if (!files.length) {
+    setStatus("Image file not found", true);
+    return;
+  }
+
+  for (const file of files) {
+    const dataUrl = await readFileAsDataUrl(file);
+    const dimensions = await loadImageDimensions(dataUrl);
+    const attachment = normalizeEditorAttachment({
+      id: generateAttachmentId(),
+      kind: "image",
+      fileName: file.name || "",
+      mimeType: file.type || "application/octet-stream",
+      size: Number(file.size || 0),
+      caption: file.name ? String(file.name).replace(/\.[^.]+$/, "") : "",
+      width: dimensions.width,
+      height: dimensions.height,
+      dataUrl
+    });
+    state.editorAttachments = [...currentEditorAttachments(), attachment];
+    insertAttachmentMarkdown(attachment);
+  }
+
+  renderAttachmentList();
+  updateSaveButtonState();
+  if (getBodyMode() === "preview") {
+    renderMarkdownPreview();
+  }
+  setStatus(`Added ${files.length} image${files.length > 1 ? "s" : ""}`);
+}
+
+function filesFromDataTransfer(dataTransfer) {
+  if (!dataTransfer || !dataTransfer.files) return [];
+  return Array.from(dataTransfer.files).filter((file) => String(file.type || "").startsWith("image/"));
+}
+
+function setDropHint(active) {
+  const next = Boolean(active);
+  el.memoBodyInput.classList.toggle("border-[#8ba2c7]", next);
+  el.memoPreview.classList.toggle("border-[#8ba2c7]", next);
+  el.memoPreview.classList.toggle("bg-[#fcfbf8]", next);
+}
+
+function ensureAttachmentLightbox() {
+  if (attachmentLightbox) return attachmentLightbox;
+  const overlay = document.createElement("div");
+  overlay.className = "fixed inset-0 z-[120] hidden items-center justify-center bg-[rgba(20,24,31,0.72)] px-6 py-6";
+  overlay.innerHTML = [
+    '<button type="button" data-lightbox-close="1" class="absolute right-4 top-4 inline-flex h-8 w-8 items-center justify-center rounded-full border border-[rgba(255,255,255,0.22)] bg-[rgba(255,255,255,0.08)] text-sm text-white">x</button>',
+    '<img data-lightbox-image="1" alt="" class="max-h-full max-w-full rounded-lg border border-[rgba(255,255,255,0.16)] bg-white/5 object-contain shadow-[0_24px_80px_rgba(0,0,0,0.35)]" />'
+  ].join("");
+  overlay.addEventListener("click", (ev) => {
+    if (ev.target === overlay || ev.target.closest("[data-lightbox-close='1']")) {
+      overlay.classList.add("hidden");
+      overlay.classList.remove("flex");
+    }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !overlay.classList.contains("hidden")) {
+      overlay.classList.add("hidden");
+      overlay.classList.remove("flex");
+    }
+  });
+  document.body.appendChild(overlay);
+  attachmentLightbox = {
+    overlay,
+    image: overlay.querySelector("[data-lightbox-image='1']")
+  };
+  return attachmentLightbox;
+}
+
+function showAttachmentLightbox(src, alt) {
+  if (!src) return;
+  const lightbox = ensureAttachmentLightbox();
+  lightbox.image.src = src;
+  lightbox.image.alt = alt || "attachment";
+  lightbox.overlay.classList.remove("hidden");
+  lightbox.overlay.classList.add("flex");
+}
+
+function canAcceptEditorImageInput() {
+  return !isReadOnlyPanelSelected();
 }
 
 function isUsagePanelSelected() {
@@ -527,7 +967,9 @@ function currentPayload() {
     projectName: el.projectNameInput.value.trim(),
     memoType: el.memoTypeInput.value,
     threadTitle: el.threadTitleInput.value.trim(),
-    memoBody: el.memoBodyInput.value.trim()
+    memoBody: el.memoBodyInput.value.trim(),
+    storageKind: currentEditingStorageKind(),
+    attachments: currentEditorAttachments()
   };
 }
 
@@ -536,7 +978,9 @@ function currentEditorSnapshot() {
     projectName: el.projectNameInput.value,
     memoType: el.memoTypeInput.value,
     threadTitle: el.threadTitleInput.value,
-    memoBody: el.memoBodyInput.value
+    memoBody: el.memoBodyInput.value,
+    storageKind: currentEditingStorageKind(),
+    attachments: attachmentsSnapshotValue()
   };
 }
 
@@ -548,13 +992,22 @@ function hasRequiredPayloadFields() {
   );
 }
 
+function currentPayloadValidationError() {
+  if (!hasRequiredPayloadFields()) {
+    return "projectName / threadTitle / memoBody are required";
+  }
+  return "";
+}
+
 function isSameSnapshot(a, b) {
   if (!a || !b) return false;
   return (
     a.projectName === b.projectName &&
     a.memoType === b.memoType &&
     a.threadTitle === b.threadTitle &&
-    a.memoBody === b.memoBody
+    a.memoBody === b.memoBody &&
+    a.storageKind === b.storageKind &&
+    a.attachments === b.attachments
   );
 }
 
@@ -563,12 +1016,160 @@ function updateSaveButtonState() {
     el.saveBtn.disabled = true;
     return;
   }
-  if (!hasRequiredPayloadFields()) {
+  if (currentPayloadValidationError()) {
     el.saveBtn.disabled = true;
     return;
   }
   const dirty = !isSameSnapshot(currentEditorSnapshot(), state.editorBaseline);
   el.saveBtn.disabled = !dirty;
+}
+
+function renderStorageControls() {
+  const config = currentRuntimeConfig();
+  const allowed = currentAllowedAdapters();
+  el.modeBadge.textContent = config.storageMode === "fixed"
+    ? displayStorageKindLabel(config.fixedAdapter)
+    : "Mixed";
+  const badgeTone = modeBadgeClass(config.fixedAdapter, config.storageMode);
+  el.modeBadge.classList.remove(
+    "border-[#b7aeca]",
+    "bg-transparent",
+    "text-[#8a5f74]",
+    "border-[#c8ced6]",
+    "text-[#5e6877]",
+    "border-[#bdd1e8]",
+    "text-[#5678a3]",
+    "border-[#d6c3ac]",
+    "text-[#8b6644]"
+  );
+  el.modeBadge.classList.add(badgeTone.border, badgeTone.bg, badgeTone.text);
+  const tooltipLines = config.storageMode === "fixed"
+    ? [
+      `Mode: fixed`,
+      `Storage: ${displayStorageKindLabel(config.fixedAdapter)}`,
+      storagePathFor(config.fixedAdapter)
+    ].filter(Boolean)
+    : [
+      "Mode: mixed",
+      `Default: ${displayStorageKindLabel(currentDefaultStorageKind())}`,
+      ...allowed.map((kind) => `${displayStorageKindLabel(kind)}: ${storagePathFor(kind)}`)
+    ].filter(Boolean);
+  el.modeBadge.title = tooltipLines.join("\n");
+
+  el.storageFilterSelect.innerHTML = '<option value="">Storages</option>';
+  for (const kind of allowed) {
+    const option = document.createElement("option");
+    option.value = kind;
+    option.textContent = displayStorageKindLabel(kind);
+    el.storageFilterSelect.appendChild(option);
+  }
+  if (currentStorageFilterKind() && allowed.includes(currentStorageFilterKind())) {
+    el.storageFilterSelect.value = currentStorageFilterKind();
+  } else {
+    el.storageFilterSelect.value = "";
+    state.storageFilterKind = "";
+  }
+
+  el.defaultStorageSelect.innerHTML = "";
+  for (const kind of config.availableAdapters || []) {
+    const option = document.createElement("option");
+    option.value = kind;
+    option.textContent = displayStorageKindLabel(kind);
+    option.disabled = !allowed.includes(kind);
+    el.defaultStorageSelect.appendChild(option);
+  }
+  el.defaultStorageSelect.value = currentDefaultStorageKind();
+  const showSelector = allowed.length > 1;
+  const showDefaultSelector = showSelector && !state.selectedId;
+  const editableStorageOptions = currentEditableStorageOptions();
+  const selectedMemo = state.items.find((memo) => memo.id === state.selectedId);
+  const selectedStorageKind = normalizeStorageKind(selectedMemo?.storageKind, "");
+  const showEditSelector = Boolean(
+    state.selectedId
+    && !isSpecialPanelId(state.selectedId)
+    && config.storageMode === "mixed"
+    && editableStorageOptions.length > 1
+    && (selectedStorageKind === "icloud" || selectedStorageKind === "firebase")
+  );
+  el.storageFilterWrap.classList.toggle("hidden", !showSelector);
+  el.storageFilterSelect.disabled = !showSelector;
+  el.defaultStorageWrap.classList.toggle("hidden", !showDefaultSelector);
+  el.defaultStorageSelect.disabled = !showDefaultSelector;
+
+  el.editStorageSelect.innerHTML = "";
+  for (const kind of editableStorageOptions) {
+    const option = document.createElement("option");
+    option.value = kind;
+    option.textContent = displayStorageKindLabel(kind);
+    el.editStorageSelect.appendChild(option);
+  }
+  el.editStorageSelect.value = currentEditingStorageKind();
+  el.editStorageWrap.classList.toggle("hidden", !showEditSelector);
+  el.editStorageSelect.disabled = !showEditSelector;
+}
+
+function launchCommandLinesForCurrentMode() {
+  const config = currentRuntimeConfig();
+  if (config.storageMode === "fixed") {
+    switch (normalizeStorageKind(config.fixedAdapter)) {
+      case "icloud":
+        return ["npm run memo:web:icloud"];
+      default:
+        return ["npm run memo:web:firebase"];
+    }
+  }
+  return [
+    "npm run memo:web",
+    "npm run memo:web:icloud",
+    "npm run memo:web:firebase"
+  ];
+}
+
+async function showModeLaunchHint() {
+  const lines = launchCommandLinesForCurrentMode();
+  const message = [
+    "Launch commands",
+    ...lines
+  ].join("\n");
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setStatus("Copied launch command", false, "force");
+    } else {
+      setStatus("Launch command shown", false, "force");
+    }
+  } catch (_error) {
+    setStatus("Launch command shown", false, "force");
+  }
+  window.alert(message);
+}
+
+function renderStorageInfo(item) {
+  const isDraft = !state.selectedId && !(item && isSpecialPanelId(item.id));
+  if (isDraft) {
+    el.storageInfo.textContent = "";
+    el.storageInfo.className = "hidden";
+    return;
+  }
+  if (item && isSpecialPanelId(item.id)) {
+    el.storageInfo.textContent = "-";
+    el.storageInfo.className = "inline-flex h-7 items-center px-1 text-[11px] font-semibold text-[#5e6f8d]";
+    return;
+  }
+  const kind = normalizeStorageKind(item?.storageKind || currentEditingStorageKind());
+  el.storageInfo.className = [
+    "inline-flex",
+    "h-3.5",
+    "items-center",
+    "rounded-md",
+    "border",
+    "px-1",
+    "text-[9px]",
+    "font-semibold",
+    "leading-none",
+    storageBadgeClass(kind)
+  ].join(" ");
+  el.storageInfo.textContent = storageBadgeText(kind);
 }
 
 function escapeHtml(text) {
@@ -813,13 +1414,37 @@ function markdownToHtml(source) {
     html = `<pre>${escapeHtml(source)}</pre>`;
   }
   if (window.DOMPurify && typeof window.DOMPurify.sanitize === "function") {
-    html = window.DOMPurify.sanitize(html);
+    // Preserve internal attachment:// URLs so preview can swap them to signed/local URLs later.
+    html = window.DOMPurify.sanitize(html, {
+      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|ftp|tel|attachment):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
+    });
   }
   return html || "<p></p>";
 }
 
+function applyAttachmentPreviewLinks(root) {
+  if (!root) return;
+  const attachments = new Map(currentEditorAttachments().map((item) => [item.id, item]));
+  root.querySelectorAll("img, a").forEach((node) => {
+    const attr = node.tagName === "IMG" ? "src" : "href";
+    const raw = String(node.getAttribute(attr) || "").trim();
+    const match = raw.match(/^attachment:\/\/([A-Za-z0-9._-]+)$/);
+    if (!match) return;
+    const attachment = attachments.get(String(match[1]));
+    const resolved = attachmentPreviewUrl(attachment);
+    if (!resolved) return;
+    node.setAttribute(attr, resolved);
+    if (node.tagName === "A") {
+      node.setAttribute("data-local-path", "");
+      node.setAttribute("target", "_blank");
+      node.setAttribute("rel", "noopener noreferrer");
+    }
+  });
+}
+
 function applyMarkdownPreviewPresentation(root) {
   if (!root) return;
+  applyAttachmentPreviewLinks(root);
   linkifyLocalPathsInPreview(root);
   annotateUsageRefLinks(root);
   root.querySelectorAll("a").forEach((anchor) => {
@@ -956,10 +1581,15 @@ function sortMemosForList(items) {
 }
 
 function listItemsForView() {
-  if (!state.showOnlyDeletable) {
-    return state.items;
+  let items = state.items;
+  const storageFilterKind = currentStorageFilterKind();
+  if (storageFilterKind) {
+    items = items.filter((item) => normalizeStorageKind(item.storageKind) === storageFilterKind);
   }
-  return state.items.filter((item) => Boolean(item.deletable));
+  if (!state.showOnlyDeletable) {
+    return items;
+  }
+  return items.filter((item) => Boolean(item.deletable));
 }
 
 function getVisibleItemsSorted() {
@@ -1050,6 +1680,7 @@ function memoTypeBadgeClass(memoType) {
 
 function displayMemoTypeLabel(memoType) {
   if (memoType === "handover memo") return "handover";
+  if (memoType === "propomemo") return "propo";
   return memoType || "memo";
 }
 
@@ -1385,6 +2016,21 @@ function renderList() {
       memoTypeBadgeClass(item.memoType)
     ].join(" ");
     typeBadge.textContent = displayMemoTypeLabel(item.memoType);
+    const storageBadge = document.createElement("span");
+    storageBadge.className = [
+      "inline-flex",
+      "h-3.5",
+      "shrink-0",
+      "items-center",
+      "rounded-md",
+      "border",
+      "px-1",
+      "text-[9px]",
+      "font-semibold",
+      "leading-none",
+      storageBadgeClass(item.storageKind)
+    ].join(" ");
+    storageBadge.textContent = storageBadgeText(item.storageKind);
     const metaText = document.createElement("small");
     metaText.className = "block min-w-0 truncate whitespace-nowrap text-[9px] leading-3.5 text-[#78829a]";
     metaText.textContent = `${item.projectName}`;
@@ -1392,6 +2038,7 @@ function renderList() {
     dateText.className = "shrink-0 whitespace-nowrap text-[9px] leading-3.5 text-[#7f8aa3]";
     dateText.textContent = formatDate(item.updatedAtISO || item.datetimeISO || item.createdAtISO);
     meta.appendChild(typeBadge);
+    meta.appendChild(storageBadge);
     meta.appendChild(metaText);
     meta.appendChild(dateText);
 
@@ -1511,10 +2158,21 @@ function fillEditor(item, options = {}) {
   const isReadOnlyPanel = Boolean(isOverviewPanel || isUsagePanel || isCodexPanel);
   state.selectedId = item && item.id ? item.id : null;
   state.selectedCacheHit = Boolean(options.fromCache);
+  if (isReadOnlyPanel) {
+    setEditorStorageKind(currentDefaultStorageKind());
+  } else if (item?.storageKind) {
+    setEditorStorageKind(item.storageKind);
+  } else if (!state.selectedId) {
+    setEditorStorageKind(options.editorStorageKind || currentDefaultStorageKind());
+  }
+  renderStorageControls();
   el.projectNameInput.value = item?.projectName || "";
   el.memoTypeInput.value = item?.memoType || "memo";
   el.threadTitleInput.value = item?.threadTitle || "";
   el.memoBodyInput.value = item?.memoBody || "";
+  state.editorAttachments = normalizeEditorAttachments(item?.attachments);
+  renderAttachmentList();
+  renderStorageInfo(state.selectedId ? item : null);
   el.dateText.textContent = isUsagePanel
     ? formatDate(state.usageFetchedAtISO || state.usageSummary?.endTime)
     : isOverviewPanel
@@ -1526,6 +2184,7 @@ function fillEditor(item, options = {}) {
   el.threadTitleInput.readOnly = isReadOnlyPanel;
   el.memoBodyInput.readOnly = isReadOnlyPanel;
   el.memoTypeInput.disabled = isReadOnlyPanel;
+  el.addImageBtn.disabled = isReadOnlyPanel;
   state.editorBaseline = isReadOnlyPanel ? null : currentEditorSnapshot();
   updateSaveButtonState();
   el.deleteBtn.disabled = isReadOnlyPanel;
@@ -1643,6 +2302,7 @@ async function loadMemos(options = {}) {
     if (el.qInput.value.trim()) params.set("q", el.qInput.value.trim());
     if (el.projectInput.value.trim()) params.set("projectName", el.projectInput.value.trim());
     if (el.typeSelect.value) params.set("memoType", el.typeSelect.value);
+    if (currentStorageFilterKind()) params.set("storageKind", currentStorageFilterKind());
     params.set("limit", "300");
     if (forceReload) params.set("nocache", "1");
 
@@ -1696,7 +2356,7 @@ async function loadMemos(options = {}) {
 async function loadMemo(id) {
   try {
     const data = await request(`/api/memos/${encodeURIComponent(id)}`);
-    fillEditor(data.item, { fromCache: state.lastResponseCacheHit });
+    fillEditor(data.item, { fromCache: state.lastResponseCacheHit, editorStorageKind: data.item?.storageKind });
   } catch (error) {
     setStatus(`Detail fetch error: ${error.message}`, true);
   }
@@ -1708,8 +2368,9 @@ async function saveMemo() {
     return;
   }
   const payload = currentPayload();
-  if (!payload.projectName || !payload.threadTitle || !payload.memoBody) {
-    setStatus("projectName / threadTitle / memoBody are required", true);
+  const validationError = currentPayloadValidationError();
+  if (validationError) {
+    setStatus(validationError, true);
     return;
   }
 
@@ -1883,6 +2544,7 @@ function currentMemoForExport() {
     memoType: el.memoTypeInput.value || "memo",
     memoBody: el.memoBodyInput.value || "",
     threadTitle: el.threadTitleInput.value.trim(),
+    storageKind: currentEditingStorageKind(),
     deletable: Boolean(selected.deletable),
     createdAtISO: selected.createdAtISO || "",
     updatedAtISO: selected.updatedAtISO || "",
@@ -2100,8 +2762,10 @@ function initEvents() {
       memoType: "memo",
       threadTitle: "",
       memoBody: "",
+      storageKind: currentDefaultStorageKind(),
+      attachments: [],
       deletable: false
-    });
+    }, { editorStorageKind: currentDefaultStorageKind() });
     el.threadTitleInput.focus();
     setStatus("New memo mode");
   });
@@ -2128,9 +2792,53 @@ function initEvents() {
   el.qInput.addEventListener("search", onFilterCleared);
   el.projectInput.addEventListener("search", onFilterCleared);
   el.typeSelect.addEventListener("change", loadMemos);
+  el.storageFilterSelect.addEventListener("change", () => {
+    state.storageFilterKind = currentStorageFilterKind();
+    loadMemos();
+  });
+  el.modeBadge.addEventListener("click", showModeLaunchHint);
+  el.defaultStorageSelect.addEventListener("change", () => {
+    state.runtimeConfig.defaultStorageKind = selectedDefaultStorageKind();
+    if (!state.selectedId && !isReadOnlyPanelSelected()) {
+      setEditorStorageKind(state.runtimeConfig.defaultStorageKind);
+    }
+    renderStorageControls();
+    if (!state.selectedId && !isReadOnlyPanelSelected()) {
+      setStatus(`Next new memo: ${displayStorageKindLabel(currentDefaultStorageKind())}`);
+      renderStorageInfo(null);
+    }
+    if (isSpecialPanelId(state.selectedId)) {
+      renderStorageInfo({ storageKind: currentEditingStorageKind() });
+    }
+    updateSaveButtonState();
+  });
+  el.editStorageSelect.addEventListener("change", () => {
+    setEditorStorageKind(el.editStorageSelect.value);
+    renderStorageControls();
+    renderStorageInfo({ storageKind: currentEditingStorageKind() });
+    updateSaveButtonState();
+    setStatus(`Change on save: ${displayStorageKindLabel(currentEditingStorageKind())}`);
+  });
   el.bodyModeToggle.addEventListener("click", () => {
     setBodyMode(getBodyMode() === "preview" ? "text" : "preview");
     updateBodyMode();
+  });
+  el.addImageBtn.addEventListener("click", () => {
+    if (isReadOnlyPanelSelected()) {
+      setStatus("Usage panel is read-only", true);
+      return;
+    }
+    el.attachmentInput.value = "";
+    el.attachmentInput.click();
+  });
+  el.attachmentInput.addEventListener("change", async (ev) => {
+    try {
+      await addImageFiles(ev.target.files);
+    } catch (error) {
+      setStatus(`Image add error: ${error.message}`, true);
+    } finally {
+      ev.target.value = "";
+    }
   });
   el.memoBodyInput.addEventListener("input", () => {
     if (getBodyMode() === "preview") {
@@ -2158,6 +2866,12 @@ function initEvents() {
       setStatus("Opened usage refs");
       return;
     }
+    const imageTarget = ev.target && ev.target.closest ? ev.target.closest("img") : null;
+    if (imageTarget && imageTarget.getAttribute("src")) {
+      ev.preventDefault();
+      showAttachmentLightbox(imageTarget.getAttribute("src"), imageTarget.getAttribute("alt") || "");
+      return;
+    }
     const target = ev.target && ev.target.closest ? ev.target.closest("a[data-local-path]") : null;
     if (!target) return;
     ev.preventDefault();
@@ -2174,10 +2888,62 @@ function initEvents() {
   });
   el.memoPreview.addEventListener("dblclick", (ev) => {
     const hasLinkTarget = ev.target && ev.target.closest && ev.target.closest("a");
-    if (hasLinkTarget || getBodyMode() !== "preview" || isReadOnlyPanelSelected()) return;
+    const hasImageTarget = ev.target && ev.target.closest && ev.target.closest("img");
+    if (hasLinkTarget || hasImageTarget || getBodyMode() !== "preview" || isReadOnlyPanelSelected()) return;
     setBodyMode("text");
     updateBodyMode();
     el.memoBodyInput.focus();
+  });
+  const dropTargets = [el.memoBodyInput, el.memoPreview, el.attachmentList].filter(Boolean);
+  dropTargets.forEach((node) => {
+    node.addEventListener("dragenter", (ev) => {
+      if (!canAcceptEditorImageInput()) return;
+      if (filesFromDataTransfer(ev.dataTransfer).length === 0) return;
+      ev.preventDefault();
+      setDropHint(true);
+    });
+    node.addEventListener("dragover", (ev) => {
+      if (!canAcceptEditorImageInput()) return;
+      if (filesFromDataTransfer(ev.dataTransfer).length === 0) return;
+      ev.preventDefault();
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";
+      setDropHint(true);
+    });
+    node.addEventListener("dragleave", (ev) => {
+      if (!ev.currentTarget.contains(ev.relatedTarget)) {
+        setDropHint(false);
+      }
+    });
+    node.addEventListener("drop", async (ev) => {
+      if (!canAcceptEditorImageInput()) return;
+      const files = filesFromDataTransfer(ev.dataTransfer);
+      if (files.length === 0) return;
+      ev.preventDefault();
+      setDropHint(false);
+      try {
+        await addImageFiles(files);
+        setStatus(`Added ${files.length} image${files.length > 1 ? "s" : ""} by drop`);
+      } catch (error) {
+        setStatus(`Image drop error: ${error.message}`, true);
+      }
+    });
+  });
+  document.addEventListener("drop", () => setDropHint(false));
+  document.addEventListener("dragend", () => setDropHint(false));
+  document.addEventListener("paste", async (ev) => {
+    if (!canAcceptEditorImageInput()) return;
+    const active = document.activeElement;
+    const editing = active === el.memoBodyInput || active === el.memoPreview || active === el.threadTitleInput;
+    if (!editing) return;
+    const files = filesFromDataTransfer(ev.clipboardData);
+    if (files.length === 0) return;
+    ev.preventDefault();
+    try {
+      await addImageFiles(files);
+      setStatus(`Added ${files.length} image${files.length > 1 ? "s" : ""} from paste`);
+    } catch (error) {
+      setStatus(`Image paste error: ${error.message}`, true);
+    }
   });
   el.projectNameInput.addEventListener("input", updateSaveButtonState);
   el.threadTitleInput.addEventListener("input", updateSaveButtonState);
@@ -2195,4 +2961,15 @@ initEvents();
 fillEditor(null);
 setBodyMode("preview");
 updateBodyMode();
-loadMemos();
+
+async function initApp() {
+  try {
+    await loadRuntimeConfig();
+    renderStorageInfo(null);
+    await loadMemos();
+  } catch (error) {
+    setStatus(`Init error: ${error.message}`, true);
+  }
+}
+
+initApp();

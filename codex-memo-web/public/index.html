@@ -67,17 +67,25 @@
   <body class="min-h-screen bg-[#f7f5f1] p-2 text-[#4b5568]">
     <div class="mx-auto min-h-[calc(100vh-1rem)] max-w-[1320px] overflow-hidden rounded-2xl border border-[#ebe7e0] bg-[#fffefd]">
       <header class="flex items-center gap-2 overflow-x-auto border-b border-[#f1ece4] bg-[#fffefd] px-3 py-1.5 whitespace-nowrap">
-        <h1 id="appTitle" class="ml-3 mr-2 cursor-pointer select-none text-sm font-semibold text-[#5e6f8d]" title="Double-click to reload">codex-memo</h1>
+        <div class="ml-3 mr-2 inline-flex shrink-0 items-center gap-1.5">
+          <h1 id="appTitle" class="cursor-pointer select-none text-sm font-semibold text-[#5e6f8d]" title="Double-click to reload">codex-memo</h1>
+          <button id="modeBadge" type="button" class="inline-flex h-5 items-center rounded-md border bg-transparent px-1 text-[10px] font-semibold leading-none" title="Mode">-</button>
+        </div>
         <input id="qInput" type="search" placeholder="Search" class="h-7 w-[210px] rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
         <input id="projectInput" type="search" placeholder="projectName" class="h-7 w-[210px] rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
         <div class="ml-1 flex items-center gap-2">
-          <select id="typeSelect" tabindex="-1" class="h-7 w-[150px] rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
-            <option value="">All types</option>
+          <select id="typeSelect" tabindex="-1" class="h-7 w-[116px] rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
+            <option value="">Types</option>
             <option value="memo">memo</option>
-            <option value="handover memo">handover memo</option>
-            <option value="propomemo">propomemo</option>
+            <option value="handover memo">handover</option>
+            <option value="propomemo">propo</option>
             <option value="keep">keep</option>
           </select>
+          <div id="storageFilterWrap" class="flex items-center">
+            <select id="storageFilterSelect" tabindex="-1" class="h-7 w-[92px] rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
+              <option value="">Storages</option>
+            </select>
+          </div>
           <button id="newBtn" tabindex="-1" type="button" class="ml-6 h-7 rounded-lg border border-[#e7e1d7] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">New</button>
           <button id="saveBtn" tabindex="-1" type="button" class="h-7 rounded-lg border border-[#6e84ad] bg-[#6e84ad] px-2 text-xs text-[#f7f9ff] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:brightness-100">Save</button>
           <button id="deleteBtn" tabindex="-1" type="button" class="h-7 rounded-lg border border-[#cf7896] bg-[#cf7896] px-2 text-xs text-[#fff7fb] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:brightness-100">Delete</button>
@@ -98,19 +106,19 @@
               <label for="projectNameInput" class="mb-1 block text-[11px] text-[#7a8398]">projectName</label>
               <input id="projectNameInput" type="text" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
             </div>
-            <div class="w-full md:w-[140px]">
+            <div class="w-full md:w-[124px]">
               <label for="memoTypeInput" class="mb-1 block text-[11px] text-[#7a8398]">memoType</label>
               <select id="memoTypeInput" tabindex="-1" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
                 <option value="memo">memo</option>
-                <option value="handover memo">handover memo</option>
-                <option value="propomemo">propomemo</option>
+                <option value="handover memo">handover</option>
+                <option value="propomemo">propo</option>
                 <option value="keep">keep</option>
               </select>
             </div>
-            <div class="w-full md:w-[210px]">
+            <div class="w-full md:w-[192px]">
               <label for="downloadFormatSelect" class="mb-1 block text-[11px] text-[#7a8398]">download</label>
               <div class="flex items-center gap-2">
-                <select id="downloadFormatSelect" tabindex="-1" aria-label="Download format" class="h-7 w-[72px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
+                <select id="downloadFormatSelect" tabindex="-1" aria-label="Download format" class="h-7 w-[62px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
                 <option value="txt">txt</option>
                 <option value="md">md</option>
                 <option value="json">json</option>
@@ -129,11 +137,19 @@
             </div>
           </div>
 
+          <div class="mb-2 mt-1 border-t border-[#ece7df]"></div>
           <div class="mb-1 flex items-center gap-2">
             <label for="threadTitleInput" class="whitespace-nowrap text-[11px] text-[#7a8398]">thread</label>
             <div class="flex-1">
               <input id="threadTitleInput" type="text" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
             </div>
+            <div id="defaultStorageWrap" class="hidden">
+              <select id="defaultStorageSelect" tabindex="-1" class="h-7 w-[88px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]"></select>
+            </div>
+            <div id="editStorageWrap" class="hidden">
+              <select id="editStorageSelect" tabindex="-1" aria-label="Edit storage" class="h-7 w-[88px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]"></select>
+            </div>
+            <span id="storageInfo" class="inline-flex h-7 items-center px-1 text-[11px] font-semibold text-[#5e6f8d]">-</span>
             <button id="bodyModeToggle" tabindex="-1" type="button" aria-label="Toggle body mode" aria-pressed="true" data-mode="preview" class="h-7 w-7 rounded-md border border-[#d4d8e0] bg-[#fefdfb] p-0 text-[10px] font-semibold leading-none text-[#4b5568] outline-none transition-colors hover:border-[#7f90b0] flex items-center justify-center" title="Preview mode">
               <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4 fill-none stroke-current" stroke-width="1.8">
                 <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"></path>
@@ -152,6 +168,17 @@
             </div>
             <textarea id="memoBodyInput" rows="14" class="h-full min-h-0 flex-1 resize-y rounded-xl border border-[#d4d8e0] bg-[#fefdfb] px-2 py-2 text-sm outline-none focus:border-[#7f90b0]"></textarea>
             <article id="memoPreview" class="markdown-preview hidden h-full min-h-0 flex-1 overflow-auto rounded-xl border border-[#d4d8e0] bg-[#fefdfb] px-3 py-2 text-sm"></article>
+          </div>
+          <div class="mt-1.5">
+            <input id="attachmentInput" type="file" accept="image/*" multiple class="hidden" />
+            <div class="flex items-start gap-1.5">
+              <button id="addImageBtn" tabindex="-1" type="button" aria-label="Add image" title="Add image" class="inline-flex h-6 w-6 shrink-0 items-center justify-center text-[#5e6f8d] hover:text-[#7f90b0]">
+                <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4 fill-none stroke-current" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M8.5 12.5 14 7a3 3 0 1 1 4.24 4.24l-7.07 7.07a5 5 0 0 1-7.07-7.07l7.43-7.43"></path>
+                </svg>
+              </button>
+              <div id="attachmentList" class="hidden flex-1 flex-wrap items-center gap-1 text-[10px] text-[#7a8398]"></div>
+            </div>
           </div>
 
         </section>

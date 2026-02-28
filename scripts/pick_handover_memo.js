@@ -4,9 +4,12 @@ const path = require("node:path");
 const readline = require("node:readline");
 const admin = require("firebase-admin");
 const { parseArgs } = require("./codex_memo_core");
+const { loadEnvFromCandidates } = require("./load_env");
 
 const COLLECTION = "codex-memo";
 const MEMO_TYPE = "handover memo";
+
+loadEnvFromCandidates();
 
 function usage() {
   console.log(`

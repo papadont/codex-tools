@@ -37,8 +37,24 @@ dist/
 ```bash
 cd "$HOME/Documents/develop/codex-tools"
 npm install
-export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcp/codex-tools-firestore-sa.json"
 ```
+
+`.env` を置くと Web/CLI 両方で自動読込される。
+
+```bash
+cp .env.example .env
+```
+
+最低限:
+```bash
+GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcp/codex-tools-firestore-sa.json"
+CODEX_MEMO_FIREBASE_BUCKET="your-project.firebasestorage.app"
+```
+
+Firebase Storage をまだ有効化していない場合:
+- Firebase Console で Storage を有効化
+- バケット名を確認して `.env` の `CODEX_MEMO_FIREBASE_BUCKET` に入れる
+- 必要なら service account に Storage 参照権限を付与する
 
 ## よく使うコマンド
 
@@ -51,6 +67,19 @@ open "$HOME/Documents/develop/codex-tools/dist/macos-launchers/codex-tools.app"
 ### codex-memo Web
 ```bash
 npm run memo:web
+```
+
+プロジェクト直下の `.env` も自動読込される。
+
+固定adapterで起動:
+```bash
+npm run memo:web:icloud
+npm run memo:web:firebase
+```
+
+Storage 接続確認:
+```bash
+npm run firebase:storage:check
 ```
 
 ### メモ保存
@@ -82,6 +111,43 @@ npm run usage:weekly:install
   - `createdAtISO`
   - `createdBy`
   - `sourceThread`
+
+### iCloud / Firebase attachment 実体保存先
+- `iCloud`: `~/Library/Mobile Documents/com~apple~CloudDocs/codex-memo/<memoId>/`
+- `Firebase`: `CODEX_MEMO_FIREBASE_BUCKET` の `memos/<memoId>/attachments/<attachmentId>.<ext>`
+- 配下:
+  - `iCloud`: `body.md`
+  - `iCloud`: `attachments.json`
+  - `iCloud`: `attachments/<attachmentId>.<ext>`
+  - `Firebase`: Cloud Storage object
+
+### attachments Phase 1 ルール
+- 本文の画像参照は `![caption](attachment://<attachmentId>)`
+- Firestore には本文と attachment メタだけを保存
+- `iCloud` / `Firebase` は attachment 実体も保存
+- 本文にある `attachment://id` は、同じ `attachments` メタが無いと保存エラー
+- `iCloud` では、upload データが無い既存 attachment は実ファイルが見つからないと保存エラー
+- `Firebase` では `storagePath` に Cloud Storage の object path を保存し、signed URL は保存しない
+
+### mixed モードの扱い
+- 一覧 / 詳細 / 検索は Firestore の `codex-memo` を正とする
+- 有効な保存先は `icloud` / `firebase` のみ
+- `storageKind=icloud|firebase` のメモは、保存時に Firestore メタと adapter 実体を同時更新する
+- attachment 配信は `storageKind` に応じて iCloud 実体または Firebase signed URL redirect を使う
+- 既存メモの `storageKind` migration は `iCloud <-> Firestore` のみ対応
+- migration は既存メモを開いたときの `thread` 右側セレクトで切り替えて `Save` する
+- migration 後は Firestore メタと target 側 `attachments.json` / Cloud Storage object path を同期する
+- `storageKind=local` の既存メモは一覧対象外
+
+### 保存先の上書き
+- `CODEX_MEMO_ICLOUD_DIR=/absolute/path`
+- `CODEX_MEMO_FIREBASE_BUCKET=<bucket-name>`
+
+例:
+```bash
+CODEX_MEMO_ICLOUD_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/MyMemo" npm run memo:web:icloud
+CODEX_MEMO_FIREBASE_BUCKET="your-project.firebasestorage.app" npm run memo:web:firebase
+```
 
 ## 補助コマンド
 ```bash
