@@ -18,7 +18,7 @@ const state = {
   selectedCacheHit: false,
   showOnlyDeletable: false,
   storageFilterKind: "",
-  autoRefreshEnabled: true,
+  autoRefreshEnabled: false,
   usageTileCollapsed: false,
   codexUsageSummary: null,
   codexUsageError: "",
@@ -54,6 +54,7 @@ const FIRESTORE_USAGE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const STORAGE_USAGE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const OPENAI_COSTS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const CODEX_USAGE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const OPENAI_COSTS_FETCH_TIMEOUT_MS = 20_000;
 
 let usageRefreshInFlight = null;
 let usageOverviewSummaryInFlight = null;
@@ -68,6 +69,7 @@ function usageSourceFooterLines() {
 
 const el = {
   memoList: document.getElementById("memoList"),
+  usagePanelSlot: document.getElementById("usagePanelSlot"),
   appTitle: document.getElementById("appTitle"),
   qInput: document.getElementById("qInput"),
   projectInput: document.getElementById("projectInput"),
@@ -169,9 +171,19 @@ function renderAutoRefreshIndicator() {
 
 function renderSummaryButtonTooltip(modelName = "") {
   if (!el.summaryBtn) return;
-  const fallbackModel = String(state.runtimeConfig?.memoSummaryModel || "").trim() || "gpt-4.1-nano";
-  const model = String(modelName || "").trim() || fallbackModel;
+  const model = String(modelName || "").trim() || getActiveSummaryModelName();
   el.summaryBtn.title = `AI summary (${model})`;
+}
+
+function getActiveSummaryModelName() {
+  if (isUsageOverviewPanelSelected()) {
+    return String(
+      state.usageOverviewAiSummaryModel
+      || state.runtimeConfig?.usageOverviewSummaryModel
+      || "gpt-4o-mini"
+    ).trim() || "gpt-4o-mini";
+  }
+  return String(state.runtimeConfig?.memoSummaryModel || "gpt-4.1-nano").trim() || "gpt-4.1-nano";
 }
 
 function notifyAutoRefreshDisabled() {
@@ -917,6 +929,75 @@ function getOpenAISnapshot() {
   };
 }
 
+function simplifyOpenAILineItemName(name) {
+  return String(name || "")
+    .replace(/-\d{4}-\d{2}-\d{2}/g, "")
+    .replace(/,\s*/g, " / ")
+    .trim();
+}
+
+function splitOpenAILineItemName(name) {
+  const simplified = simplifyOpenAILineItemName(name);
+  const parts = simplified.split(" / ").map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2) {
+    const kind = parts.pop();
+    return {
+      model: parts.join(" / "),
+      kind
+    };
+  }
+  return {
+    model: simplified,
+    kind: ""
+  };
+}
+
+function roundUsd(value, digits = 3) {
+  const factor = 10 ** digits;
+  return Math.round(Number(value || 0) * factor) / factor;
+}
+
+function formatOpenAILineItems14d(lineItems, usdToJpy) {
+  const items = Array.isArray(lineItems) ? lineItems : [];
+  const grouped = new Map();
+  items.forEach((item) => {
+    const { model, kind } = splitOpenAILineItemName(item?.name || "");
+    const amountUsd = roundUsd(Number(item?.amountUsd || 0), 3);
+    if (amountUsd <= 0) return;
+    const key = model || "other";
+    const existing = grouped.get(key) || { model: key, entries: [] };
+    existing.entries.push({
+      kind: kind || "other",
+      amountUsd
+    });
+    grouped.set(key, existing);
+  });
+  const charged = Array.from(grouped.values())
+    .map((group) => {
+      const entries = group.entries
+        .map((entry) => {
+          const amountUsd = roundUsd(entry.amountUsd, 3);
+          return {
+            kind: entry.kind,
+            amountUsd,
+            amountJpy: Math.round(amountUsd * usdToJpy)
+          };
+        })
+        .filter((entry) => entry.amountUsd > 0)
+        .sort((a, b) => b.amountUsd - a.amountUsd || a.kind.localeCompare(b.kind));
+      const totalUsd = roundUsd(entries.reduce((sum, entry) => sum + entry.amountUsd, 0), 3);
+      return {
+        model: group.model,
+        totalUsd,
+        entries
+      };
+    })
+    .filter((item) => item.totalUsd > 0)
+    .sort((a, b) => b.totalUsd - a.totalUsd || a.model.localeCompare(b.model));
+  if (!charged.length) return null;
+  return charged;
+}
+
 function getRoughMonthlyCostSnapshot() {
   const storage = getStorageSnapshot();
   const openai = getOpenAISnapshot();
@@ -957,6 +1038,9 @@ function buildUsageOverviewBody() {
   const codexSecondary = state.codexUsageSummary?.secondaryWindow || null;
   const monthPace = getMonthPaceInfo();
   const fetchedAtISO = getUsageOverviewFetchedAtISO();
+  const openaiRecentUsd = Number(state.openaiCostsSummary?.totalUsd14d || 0);
+  const openaiRecentJpy = openaiRecentUsd * roughCost.usdToJpy;
+  const openaiLineItems14d = formatOpenAILineItems14d(state.openaiCostsSummary?.lineItems14d, roughCost.usdToJpy);
   const fsPerDay = Array.isArray(state.usageSummary?.perDay) ? state.usageSummary.perDay : [];
   const fs14Desc = [...fsPerDay]
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
@@ -987,8 +1071,17 @@ function buildUsageOverviewBody() {
         : `- status: unavailable (${state.openaiCostsSummary.reason || "-"})`
       : `- status: ${state.openaiCostsError ? `error (${state.openaiCostsError})` : "loading"}`,
     state.openaiCostsSummary && state.openaiCostsSummary.available
-      ? `- month-end rough: ${formatJpy((roughCost.openaiJpy / Math.max(0.001, monthPace.elapsedRatio)), 0)} if current pace continues`
-      : "- month-end rough: -",
+      ? `- last 14d spend: **${formatUsd(openaiRecentUsd, 3)}** (${formatJpy(openaiRecentJpy, 0)})`
+      : "- last 14d spend: -",
+    "",
+    "## Firestore",
+    "",
+    state.usageSummary
+      ? `- free-tier: R ${boldPercent(fs.ratePercent.read, 1)} / W ${boldPercent(fs.ratePercent.write, 1)} / D ${boldPercent(fs.ratePercent.delete, 1)}`
+      : `- status: ${state.usageError ? `error (${state.usageError})` : "loading"}`,
+    state.usageSummary
+      ? `- pace vs recent peak (excl today): ${formatPeakPaceMetric("R", fs.relativePercent.read)} / ${formatPeakPaceMetric("W", fs.relativePercent.write)} / ${formatPeakPaceMetric("D", fs.relativePercent.delete)}`
+      : "- pace vs recent peak (excl today): -",
     "",
     "## Storage",
     "",
@@ -1002,14 +1095,28 @@ function buildUsageOverviewBody() {
       ? `- pace: 30d egress ${formatBytes(storage.egressBytes30d)} / rough overage ${formatJpy(roughCost.storageJpy, 0)} mo`
       : "- rough overage estimate: -",
     "",
-    "## Firestore",
+    "### OpenAI 14d line items",
     "",
-    state.usageSummary
-      ? `- free-tier: R ${boldPercent(fs.ratePercent.read, 1)} / W ${boldPercent(fs.ratePercent.write, 1)} / D ${boldPercent(fs.ratePercent.delete, 1)}`
-      : `- status: ${state.usageError ? `error (${state.usageError})` : "loading"}`,
-    state.usageSummary
-      ? `- pace vs recent peak (excl today): ${formatPeakPaceMetric("R", fs.relativePercent.read)} / ${formatPeakPaceMetric("W", fs.relativePercent.write)} / ${formatPeakPaceMetric("D", fs.relativePercent.delete)}`
-      : "- pace vs recent peak (excl today): -",
+    "| model | input | output | total |",
+    "| --- | ---: | ---: | ---: |"
+  );
+
+  if (openaiLineItems14d && openaiLineItems14d.length) {
+    for (const item of openaiLineItems14d) {
+      const inputUsd = item.entries
+        .filter((entry) => entry.kind === "input")
+        .reduce((sum, entry) => sum + entry.amountUsd, 0);
+      const outputUsd = item.entries
+        .filter((entry) => entry.kind === "output")
+        .reduce((sum, entry) => sum + entry.amountUsd, 0);
+      const totalJpy = Math.round(item.totalUsd * roughCost.usdToJpy);
+      lines.push(`| ${item.model} | ${formatUsd(inputUsd, 3)} | ${formatUsd(outputUsd, 3)} | ${formatUsd(item.totalUsd, 3)} (${formatJpy(totalJpy, 0)}) |`);
+    }
+  } else {
+    lines.push("| - | - | - | - |");
+  }
+
+  lines.push(
     "",
     "### Firestore 14d details",
     "",
@@ -2029,8 +2136,8 @@ async function loadOpenAICostsSummary(options = {}) {
   const timeoutPromise = new Promise((_, reject) => {
     setTimeout(() => {
       if (controller) controller.abort();
-      reject(new Error(`Timed out (${USAGE_FETCH_TIMEOUT_MS}ms)`));
-    }, USAGE_FETCH_TIMEOUT_MS);
+      reject(new Error(`Timed out (${OPENAI_COSTS_FETCH_TIMEOUT_MS}ms)`));
+    }, OPENAI_COSTS_FETCH_TIMEOUT_MS);
   });
 
   try {
@@ -2051,6 +2158,9 @@ async function loadOpenAICostsSummary(options = {}) {
 
 function renderList() {
   el.memoList.innerHTML = "";
+  if (el.usagePanelSlot) {
+    el.usagePanelSlot.innerHTML = "";
+  }
   const items = sortMemosForList(listItemsForView());
 
   const usageLi = document.createElement("li");
@@ -2058,8 +2168,6 @@ function renderList() {
     "group",
     "relative",
     "cursor-pointer",
-    "-mt-1",
-    "mb-2.5",
     "px-0.5",
     "py-0.5",
     "transition-opacity",
@@ -2434,7 +2542,11 @@ function renderList() {
   }
   usageLi.title = `Firestore: ${formatDate(state.usageFetchedAtISO || state.usageSummary?.endTime)} | Storage: ${formatDate(state.storageUsageFetchedAtISO || state.storageUsageSummary?.fetchedAtISO)} | OpenAI: ${formatDate(state.openaiCostsFetchedAtISO || state.openaiCostsSummary?.fetchedAtISO)} | Codex: ${formatDate(state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO)}`;
   usageLi.addEventListener("click", () => fillEditor(buildUsageOverviewPanelItem(), { fromCache: false }));
-  el.memoList.appendChild(usageLi);
+  if (el.usagePanelSlot) {
+    el.usagePanelSlot.appendChild(usageLi);
+  } else {
+    el.memoList.appendChild(usageLi);
+  }
 
   for (const item of items) {
     const li = document.createElement("li");
@@ -2641,13 +2753,16 @@ function fillEditor(item, options = {}) {
   renderAttachmentList();
   renderStorageInfo(state.selectedId ? item : null);
   renderEditorDividerAccent(isReadOnlyPanel ? "" : currentEditingStorageKind());
-  el.dateText.textContent = isUsagePanel
-    ? formatDate(state.usageFetchedAtISO || state.usageSummary?.endTime)
-    : isOverviewPanel
-      ? formatDate(state.codexUsageFetchedAtISO || state.usageFetchedAtISO || item?.updatedAtISO)
-    : isCodexPanel
-      ? formatDate(state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO)
-      : renderDateWithCacheIndicator(item?.updatedAtISO || item?.createdAtISO || item?.datetimeISO);
+  renderSummaryButtonTooltip();
+  if (el.dateText) {
+    el.dateText.textContent = isUsagePanel
+      ? formatDate(state.usageFetchedAtISO || state.usageSummary?.endTime)
+      : isOverviewPanel
+        ? formatDate(state.codexUsageFetchedAtISO || state.usageFetchedAtISO || item?.updatedAtISO)
+      : isCodexPanel
+        ? formatDate(state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO)
+        : renderDateWithCacheIndicator(item?.updatedAtISO || item?.createdAtISO || item?.datetimeISO);
+  }
   el.projectNameInput.readOnly = isReadOnlyPanel;
   el.threadTitleInput.readOnly = isReadOnlyPanel;
   el.memoBodyInput.readOnly = isReadOnlyPanel;
@@ -3169,12 +3284,51 @@ async function summarizeMemoAtPointer(ev) {
   }
 
   const reqId = ++summaryRequestSeq;
+  const activeModel = getActiveSummaryModelName();
   showSummaryTooltip({
-    head: `summary (${String(state.runtimeConfig?.memoSummaryModel || "gpt-4.1-nano")})`,
+    head: `summary (${activeModel})`,
     body: "要約中...",
     isError: false,
     followPointer: true
   });
+
+  if (isUsageOverviewPanelSelected()) {
+    try {
+      await refreshUsageOverviewSummaryIfNeeded({ forceReload: true });
+      if (reqId !== summaryRequestSeq) return;
+      if (state.usageOverviewAiSummaryError) {
+        showSummaryTooltip({
+          head: "summary error",
+          body: state.usageOverviewAiSummaryError,
+          isError: true,
+          followPointer: true
+        });
+        renderSummaryButtonTooltip();
+        setStatus(`Summary error: ${state.usageOverviewAiSummaryError}`, true);
+        return;
+      }
+      showSummaryTooltip({
+        head: `summary (${getActiveSummaryModelName()})`,
+        body: state.usageOverviewAiSummary || "(empty)",
+        isError: false,
+        followPointer: true
+      });
+      renderSummaryButtonTooltip();
+      setStatus("Summary ready");
+      return;
+    } catch (error) {
+      if (reqId !== summaryRequestSeq) return;
+      showSummaryTooltip({
+        head: "summary error",
+        body: String(error.message || error || "Failed to summarize"),
+        isError: true,
+        followPointer: true
+      });
+      renderSummaryButtonTooltip();
+      setStatus(`Summary error: ${error.message || error}`, true);
+      return;
+    }
+  }
 
   try {
     const res = await request("/api/summarize", {

@@ -100,20 +100,19 @@
 
       <main class="relative grid h-[calc(100vh-74px)] grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)]">
         <aside class="overflow-auto border-b border-[#ebe4d9] bg-[#fbf8f3] p-3 md:border-b-0 md:border-r">
+          <div id="usagePanelSlot" class="-mt-3 sticky -top-3 z-10 -mx-3 bg-[#fbf8f3] px-3 pb-2"></div>
           <ul id="memoList" class="space-y-1"></ul>
         </aside>
 
         <section class="relative flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden overflow-y-auto bg-[#fefcf9] px-4 pb-1 pt-2">
-          <div class="absolute right-4 top-2 z-10 flex items-center gap-1.5 text-right text-[11px] text-[#7a8398]">
-            <span id="dateText" class="block">-</span>
-          </div>
           <div class="mb-2 flex flex-wrap items-end gap-2">
             <div class="w-full md:w-[210px]">
-              <label for="projectNameInput" class="mb-1 block text-[11px] text-[#7a8398]">projectName</label>
-              <input id="projectNameInput" type="text" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
+              <div class="flex h-7 items-center gap-2">
+                <label for="projectNameInput" class="shrink-0 text-[11px] text-[#7a8398]">proj</label>
+                <input id="projectNameInput" type="text" class="h-7 min-w-0 flex-1 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
+              </div>
             </div>
-            <div class="w-full md:w-[124px]">
-              <label for="memoTypeInput" class="mb-1 block text-[11px] text-[#7a8398]">memoType</label>
+            <div class="w-full md:w-[98px]">
               <select id="memoTypeInput" tabindex="-1" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
                 <option value="memo">memo</option>
                 <option value="handover memo">handover</option>
@@ -121,8 +120,8 @@
                 <option value="keep">keep</option>
               </select>
             </div>
+            <div aria-hidden="true" class="hidden h-5 w-px self-center bg-[#e2ddd4] md:block"></div>
             <div class="w-full md:w-[192px]">
-              <label for="downloadFormatSelect" class="mb-1 block text-[11px] text-[#7a8398]">download</label>
               <div class="flex items-center gap-1">
                 <select id="downloadFormatSelect" tabindex="-1" aria-label="Download format" class="h-7 w-[62px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
                 <option value="txt">txt</option>

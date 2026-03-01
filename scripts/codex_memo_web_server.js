@@ -618,17 +618,29 @@ function parseOpenAICostBuckets(payload) {
     const rows = Array.isArray(bucket?.results) ? bucket.results : [];
     let amount = 0;
     let currency = "usd";
+    const lineItemTotals = new Map();
     for (const row of rows) {
       const value = Number(row?.amount?.value || 0);
       if (Number.isFinite(value)) amount += value;
       if (row?.amount?.currency) currency = String(row.amount.currency).toLowerCase();
+      const lineItem = String(row?.line_item || "other").trim() || "other";
+      lineItemTotals.set(lineItem, usdRound(Number(lineItemTotals.get(lineItem) || 0) + (Number.isFinite(value) ? value : 0), 6));
     }
     totalUsd += amount;
+    const lineItems = Array.from(lineItemTotals.entries())
+      .map(([name, amountUsd]) => ({
+        name,
+        amountUsd: usdRound(amountUsd, 6),
+        currency
+      }))
+      .filter((item) => item.amountUsd > 0)
+      .sort((a, b) => b.amountUsd - a.amountUsd || a.name.localeCompare(b.name));
     daily.push({
       startTime: Number(bucket?.start_time || 0),
       endTime: Number(bucket?.end_time || 0),
       amountUsd: usdRound(amount, 6),
-      currency
+      currency,
+      lineItems
     });
   }
   daily.sort((a, b) => a.startTime - b.startTime);
@@ -656,6 +668,7 @@ async function getOpenAICostsPayload() {
     bucket_width: "1d",
     limit: "31"
   });
+  qs.append("group_by", "line_item");
   const res = await fetch(`${OPENAI_COSTS_ENDPOINT}?${qs.toString()}`, {
     method: "GET",
     headers: {
@@ -670,14 +683,38 @@ async function getOpenAICostsPayload() {
 
   const parsed = parseOpenAICostBuckets(payload);
   const latestDay = parsed.daily[parsed.daily.length - 1] || null;
+  const last14Daily = parsed.daily.slice(-14);
+  const lineItems14dMap = new Map();
+  let totalUsd14d = 0;
+  for (const day of last14Daily) {
+    totalUsd14d += Number(day?.amountUsd || 0);
+    const items = Array.isArray(day?.lineItems) ? day.lineItems : [];
+    for (const item of items) {
+      const name = String(item?.name || "other").trim() || "other";
+      const amountUsd = Number(item?.amountUsd || 0);
+      if (!Number.isFinite(amountUsd) || amountUsd <= 0) continue;
+      lineItems14dMap.set(name, usdRound(Number(lineItems14dMap.get(name) || 0) + amountUsd, 6));
+    }
+  }
+  const lineItems14d = Array.from(lineItems14dMap.entries())
+    .map(([name, amountUsd]) => ({
+      name,
+      amountUsd: usdRound(amountUsd, 6),
+      currency: "usd"
+    }))
+    .filter((item) => item.amountUsd > 0)
+    .sort((a, b) => b.amountUsd - a.amountUsd || a.name.localeCompare(b.name));
   return {
     fetchedAtISO: new Date().toISOString(),
     available: true,
     windowDays: 30,
+    windowDaysRecent: 14,
     startTime,
     endTime,
     totalUsd30d: parsed.totalUsd,
+    totalUsd14d: usdRound(totalUsd14d, 6),
     latestDayUsd: latestDay ? latestDay.amountUsd : 0,
+    lineItems14d,
     daily: parsed.daily,
     budgetReference: {
       amountJpy: DEFAULT_BUDGET_JPY
@@ -1253,7 +1290,7 @@ async function summarizeUsageOverviewWithOpenAI({
       content: [
         {
           type: "input_text",
-          text: "You are a cloud service usage analyst. Analyze the usage data and output a concise Japanese paragraph (200–300 chars). Cover key metrics, cost anomalies, and optimization actions. No bullet points, no intro, no conclusion. Example — INPUT:「月額合計¥94（OpenAI ¥94 / Storage ¥0）上限¥3000。Firestore読み取り今月6.2%使用、2/28は3077件と急増。Codex週次残85%。」OUTPUT:「月額コストは¥94と上限¥3000に対して余裕があり、現ペースなら月末も同水準の見込み。ただし2/28のFirestoreリードが3077件と前日比約20倍に急増しており原因の特定が急務。無料枠・Codex枠ともに残量は十分だが、読み取り急増が継続すると無料枠の圧迫リスクがある。」"
+          text: "You are a cloud service usage analyst. Analyze the usage data and output a concise Japanese paragraph (300–400 chars). Cover key metrics, cost anomalies, and optimization actions. No bullet points, no intro, no conclusion. 重要事項:codexは1週間周期のリセットを常に意識する。Openaiのusageは再重要事項。課金発生要因について必ず言及すること。Example — INPUT:「月額合計¥94（OpenAI ¥94 / Storage ¥0）上限¥3000。Firestore読み取り今月6.2%使用、2/28は3077件と急増。Codex週次残85%。」OUTPUT:「月額コストは¥94と上限¥3000に対して余裕があり、現ペースなら月末も同水準の見込み。ただし2/28のFirestoreリードが3077件と前日比約20倍に急増しており原因の特定が急務。無料枠・Codex枠ともに残量は十分だが、読み取り急増が継続すると無料枠の圧迫リスクがある。」"
         }
       ]
     },
@@ -1281,6 +1318,13 @@ async function summarizeUsageOverviewWithOpenAI({
               dayOfMonth,
               daysInMonth,
               monthToDateJpy: Number(Number(roughCostSummary?.openaiJpy || 0).toFixed(0)),
+              last14dUsd: Number(Number(openaiSummary?.totalUsd14d || 0).toFixed(3)),
+              billedLineItems14d: Array.isArray(openaiSummary?.lineItems14d)
+                ? openaiSummary.lineItems14d.map((item) => ({
+                  name: item.name,
+                  amountUsd: Number(Number(item.amountUsd || 0).toFixed(3))
+                }))
+                : [],
               projectedMonthEndJpy: openaiSummary?.available
                 ? Number((openaiTotalUsd30d / Math.max(0.001, elapsedMonthRatio)).toFixed(0))
                 : null
@@ -1327,7 +1371,7 @@ async function summarizeUsageOverviewWithOpenAI({
     body: JSON.stringify({
       model,
       input,
-      max_output_tokens: 440  // 文章形式なので220→400に拡張
+      max_output_tokens: 840  // 文章形式なので220→400に拡張
     })
   });
 
