@@ -36,6 +36,8 @@ const state = {
   usageOverviewAiSummaryModel: "",
   usageOverviewAiSummaryError: "",
   usageOverviewAiSummaryKey: "",
+  usageRefreshPending: false,
+  usageRefreshReason: "",
   editorAttachments: [],
   pointerClientX: 0,
   pointerClientY: 0
@@ -50,10 +52,6 @@ const FIREBASE_USAGE_PAGE_URL = "https://console.firebase.google.com/project/hus
 const STORAGE_USAGE_PAGE_URL = "https://console.firebase.google.com/project/hush-pointer/storage";
 const CODEX_USAGE_PAGE_URL = "https://chatgpt.com/codex/settings/usage";
 const OPENAI_USAGE_PAGE_URL = "https://platform.openai.com/usage";
-const FIRESTORE_USAGE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
-const STORAGE_USAGE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
-const OPENAI_COSTS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
-const CODEX_USAGE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 const OPENAI_COSTS_FETCH_TIMEOUT_MS = 20_000;
 
 let usageRefreshInFlight = null;
@@ -749,7 +747,7 @@ function resetDateText(window) {
   return formatDate(window?.resetAtISO);
 }
 
-function getUsageOverviewFetchedAtISO() {
+function getUsageStatsLatestFetchedAtISO() {
   const fsISO = state.usageFetchedAtISO || state.usageSummary?.endTime || "";
   const codexISO = state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO || "";
   const storageISO = state.storageUsageFetchedAtISO || state.storageUsageSummary?.fetchedAtISO || "";
@@ -757,7 +755,7 @@ function getUsageOverviewFetchedAtISO() {
   const candidates = [fsISO, codexISO, storageISO, openaiISO]
     .map((value) => ({ value, ms: value ? new Date(value).getTime() : NaN }))
     .filter((item) => Number.isFinite(item.ms))
-    .sort((a, b) => a.ms - b.ms);
+    .sort((a, b) => b.ms - a.ms);
   if (candidates.length) {
     return candidates[0].value;
   }
@@ -1035,9 +1033,9 @@ function buildUsageOverviewBody() {
   const storage = getStorageSnapshot();
   const openai = getOpenAISnapshot();
   const roughCost = getRoughMonthlyCostSnapshot();
+  const codexPrimary = state.codexUsageSummary?.primaryWindow || null;
   const codexSecondary = state.codexUsageSummary?.secondaryWindow || null;
   const monthPace = getMonthPaceInfo();
-  const fetchedAtISO = getUsageOverviewFetchedAtISO();
   const openaiRecentUsd = Number(state.openaiCostsSummary?.totalUsd14d || 0);
   const openaiRecentJpy = openaiRecentUsd * roughCost.usdToJpy;
   const openaiLineItems14d = formatOpenAILineItems14d(state.openaiCostsSummary?.lineItems14d, roughCost.usdToJpy);
@@ -1046,19 +1044,23 @@ function buildUsageOverviewBody() {
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
     .slice(0, 14);
 
-  const lines = [`<small>fetched: ${formatDate(fetchedAtISO)}</small>`];
+  const lines = [
+    `rough monthly cost: **${formatJpy(roughCost.totalJpy, 0)}** / line ¥3000 (Storage ${formatJpy(roughCost.storageJpy, 0)} + OpenAI ${formatJpy(roughCost.openaiJpy, 0)})`
+  ];
   if (state.usageOverviewAiSummary) {
+    lines.push("");
     lines.push(...quoteMarkdownLines(state.usageOverviewAiSummary));
   }
   lines.push(
     "",
-    `- rough total monthly cost: **${formatJpy(roughCost.totalJpy, 0)}** / redline ¥3000 (Storage ${formatJpy(roughCost.storageJpy, 0)} + OpenAI ${formatJpy(roughCost.openaiJpy, 0)})`,
-    "",
     "## Codex",
     "",
     state.codexUsageSummary
-      ? `- weekly remaining: ${boldPercent(codexSecondary?.remainingPercent, 0)} reset: ${resetDateText(codexSecondary)}`
+      ? `- 5h remaining: ${boldPercent(codexPrimary?.remainingPercent, 0)} reset: ${resetDateText(codexPrimary)}`
       : `- status: ${state.codexUsageError ? `error (${state.codexUsageError})` : "loading"}`,
+    state.codexUsageSummary
+      ? `- weekly remaining: ${boldPercent(codexSecondary?.remainingPercent, 0)} reset: ${resetDateText(codexSecondary)}`
+      : "- weekly remaining: -",
     state.codexUsageSummary
       ? `- next resetまで: ${formatDuration(state.codexUsageSummary?.secondaryWindow?.resetAfterSeconds || 0)} / used ${boldPercent(codexSecondary?.usedPercent, 0)}`
       : "- next resetまで: -",
@@ -1067,7 +1069,7 @@ function buildUsageOverviewBody() {
     "",
     state.openaiCostsSummary
       ? state.openaiCostsSummary.available
-        ? `- month-to-date: **${formatJpy(roughCost.openaiJpy, 0)}** / today ${monthPace.dayOfMonth}/${monthPace.daysInMonth}`
+        ? `- month cost: **${formatJpy(roughCost.openaiJpy, 0)}** / day ${monthPace.dayOfMonth}/${monthPace.daysInMonth}`
         : `- status: unavailable (${state.openaiCostsSummary.reason || "-"})`
       : `- status: ${state.openaiCostsError ? `error (${state.openaiCostsError})` : "loading"}`,
     state.openaiCostsSummary && state.openaiCostsSummary.available
@@ -1077,11 +1079,11 @@ function buildUsageOverviewBody() {
     "## Firestore",
     "",
     state.usageSummary
-      ? `- free-tier: R ${boldPercent(fs.ratePercent.read, 1)} / W ${boldPercent(fs.ratePercent.write, 1)} / D ${boldPercent(fs.ratePercent.delete, 1)}`
+      ? `- today free-tier: R ${boldPercent(fs.ratePercent.read, 1)} / W ${boldPercent(fs.ratePercent.write, 1)} / D ${boldPercent(fs.ratePercent.delete, 1)}`
       : `- status: ${state.usageError ? `error (${state.usageError})` : "loading"}`,
     state.usageSummary
-      ? `- pace vs recent peak (excl today): ${formatPeakPaceMetric("R", fs.relativePercent.read)} / ${formatPeakPaceMetric("W", fs.relativePercent.write)} / ${formatPeakPaceMetric("D", fs.relativePercent.delete)}`
-      : "- pace vs recent peak (excl today): -",
+      ? `- vs 14d peak: ${formatPeakPaceMetric("R", fs.relativePercent.read)} / ${formatPeakPaceMetric("W", fs.relativePercent.write)} / ${formatPeakPaceMetric("D", fs.relativePercent.delete)}`
+      : "- vs 14d peak: -",
     "",
     "## Storage",
     "",
@@ -1089,11 +1091,11 @@ function buildUsageOverviewBody() {
       ? `- now: ${formatBytes(storage.bytes)} / objects ${formatNumberCompact(storage.objects)}`
       : `- status: ${state.storageUsageError ? `error (${state.storageUsageError})` : "loading"}`,
     state.storageUsageSummary
-      ? `- no-cost usage: storage ${boldPercent(storage.percentOfNoCost.storage, 1)} / egress ${boldPercent(storage.percentOfNoCost.download, 1)} / A ${boldPercent(storage.percentOfNoCost.classA, 1)} / B ${boldPercent(storage.percentOfNoCost.classB, 1)}`
-      : "- no-cost usage: -",
+      ? `- no-cost: storage ${boldPercent(storage.percentOfNoCost.storage, 1)} / egress ${boldPercent(storage.percentOfNoCost.download, 1)} / A ${boldPercent(storage.percentOfNoCost.classA, 1)} / B ${boldPercent(storage.percentOfNoCost.classB, 1)}`
+      : "- no-cost: -",
     state.storageUsageSummary
-      ? `- pace: 30d egress ${formatBytes(storage.egressBytes30d)} / rough overage ${formatJpy(roughCost.storageJpy, 0)} mo`
-      : "- rough overage estimate: -",
+      ? `- 30d pace: egress ${formatBytes(storage.egressBytes30d)} / rough overage ${formatJpy(roughCost.storageJpy, 0)} mo`
+      : "- 30d pace: -",
     "",
     "### OpenAI 14d line items",
     "",
@@ -1334,6 +1336,7 @@ function updateSaveButtonState() {
 function renderStorageControls() {
   const config = currentRuntimeConfig();
   const allowed = currentAllowedAdapters();
+  const selectedFilterKind = normalizeStorageKind(state.storageFilterKind || "", "");
   el.modeBadge.textContent = config.storageMode === "fixed"
     ? displayStorageKindLabel(config.fixedAdapter)
     : "Mixed";
@@ -1376,8 +1379,8 @@ function renderStorageControls() {
     option.textContent = displayStorageKindLabel(kind);
     el.storageFilterSelect.appendChild(option);
   }
-  if (currentStorageFilterKind() && allowed.includes(currentStorageFilterKind())) {
-    el.storageFilterSelect.value = currentStorageFilterKind();
+  if (selectedFilterKind && allowed.includes(selectedFilterKind)) {
+    el.storageFilterSelect.value = selectedFilterKind;
   } else {
     el.storageFilterSelect.value = "";
     state.storageFilterKind = "";
@@ -1907,64 +1910,29 @@ function getVisibleItemsSorted() {
   return sortMemosForList(listItemsForView());
 }
 
-function parseIsoToMs(value) {
-  if (!value) return NaN;
-  const ms = new Date(value).getTime();
-  return Number.isFinite(ms) ? ms : NaN;
-}
-
-function shouldRefreshByAge(fetchedAtISO, intervalMs) {
-  const fetchedAtMs = parseIsoToMs(fetchedAtISO);
-  if (!Number.isFinite(fetchedAtMs)) return true;
-  return (Date.now() - fetchedAtMs) >= Math.max(1, Number(intervalMs || 0));
-}
-
-function shouldRefreshUsage(options = {}) {
-  const forceReload = Boolean(options.forceReload);
-  if (forceReload) {
-    return { refreshFirestore: true, refreshCodex: true, refreshStorage: true, refreshOpenAI: true };
-  }
-  return {
-    refreshFirestore: shouldRefreshByAge(state.usageFetchedAtISO, FIRESTORE_USAGE_REFRESH_INTERVAL_MS),
-    refreshCodex: shouldRefreshByAge(state.codexUsageFetchedAtISO, CODEX_USAGE_REFRESH_INTERVAL_MS),
-    refreshStorage: shouldRefreshByAge(state.storageUsageFetchedAtISO, STORAGE_USAGE_REFRESH_INTERVAL_MS),
-    refreshOpenAI: shouldRefreshByAge(state.openaiCostsFetchedAtISO, OPENAI_COSTS_REFRESH_INTERVAL_MS)
-  };
-}
-
-function refreshUsageIfNeeded(options = {}) {
-  const autoTriggered = Boolean(options.autoTriggered);
-  if (autoTriggered && !state.autoRefreshEnabled) {
-    return Promise.resolve(false);
-  }
+function refreshUsageStats(options = {}) {
   if (state.usageTileCollapsed) {
     return Promise.resolve(false);
   }
-  const {
-    refreshFirestore,
-    refreshCodex,
-    refreshStorage,
-    refreshOpenAI
-  } = shouldRefreshUsage(options);
   const forceReload = Boolean(options.forceReload);
-
-  if (!refreshFirestore && !refreshCodex && !refreshStorage && !refreshOpenAI) {
-    return Promise.resolve(false);
-  }
-  if (!forceReload && usageRefreshInFlight) {
+  const reason = String(options.reason || "").trim();
+  if (usageRefreshInFlight) {
     return usageRefreshInFlight;
   }
-
-  const jobs = [];
-  if (refreshFirestore) jobs.push(loadUsageSummary({ forceReload }));
-  if (refreshCodex) jobs.push(loadCodexUsageSummary({ forceReload }));
-  if (refreshStorage) jobs.push(loadStorageUsageSummary({ forceReload }));
-  if (refreshOpenAI) jobs.push(loadOpenAICostsSummary({ forceReload }));
-
-  usageRefreshInFlight = Promise.all(jobs)
+  state.usageRefreshPending = true;
+  state.usageRefreshReason = reason;
+  renderList();
+  usageRefreshInFlight = Promise.all([
+    loadUsageSummary({ forceReload }),
+    loadCodexUsageSummary({ forceReload }),
+    loadStorageUsageSummary({ forceReload }),
+    loadOpenAICostsSummary({ forceReload })
+  ])
     .then(() => refreshUsageOverviewSummaryIfNeeded({ forceReload }))
     .finally(() => {
       usageRefreshInFlight = null;
+      state.usageRefreshPending = false;
+      state.usageRefreshReason = "";
       if (state.selectedId === USAGE_OVERVIEW_PANEL_ID) {
         fillEditor(buildUsageOverviewPanelItem(), { fromCache: false });
         return;
@@ -2482,6 +2450,19 @@ function renderList() {
     ? "hidden"
     : "text-[10px] font-semibold tracking-wide text-[#7c869a]";
   usageLabel.textContent = state.usageTileCollapsed ? "" : "usage";
+  const usageMeta = document.createElement("span");
+  usageMeta.className = state.usageTileCollapsed
+    ? "hidden"
+    : "ml-2 min-w-0 flex-1 truncate text-[10px] text-[#9098a8]";
+  if (!state.usageTileCollapsed) {
+    const latestFetchedAtISO = getUsageStatsLatestFetchedAtISO();
+    const roughCost = getRoughMonthlyCostSnapshot();
+    const updatingText = state.usageRefreshPending
+      ? (state.usageRefreshReason === "summary" ? " / refreshing for AI..." : " / updating...")
+      : "";
+    usageMeta.textContent = `${formatUsd(roughCost.totalUsd, 2)} / ${formatJpy(roughCost.totalJpy, 0)} / ${formatDate(latestFetchedAtISO)}${updatingText}`;
+    usageMeta.title = `rough total cost ${formatUsd(roughCost.totalUsd, 2)} / ${formatJpy(roughCost.totalJpy, 0)} | latest fetch ${formatDate(latestFetchedAtISO)}${state.usageRefreshPending ? " | updating" : ""}`;
+  }
   const collapseIcon = document.createElement("span");
   collapseIcon.className = state.usageTileCollapsed
     ? "inline-flex h-4 w-4 items-center justify-center rounded text-[11px] leading-none text-[#e5e7eb]"
@@ -2494,11 +2475,9 @@ function renderList() {
     ev.stopPropagation();
     state.usageTileCollapsed = !state.usageTileCollapsed;
     renderList();
-    if (!state.usageTileCollapsed) {
-      maybeRunAutoRefresh(() => refreshUsageIfNeeded({ autoTriggered: true })).catch(() => {});
-    }
   });
   usageTop.appendChild(usageLabel);
+  usageTop.appendChild(usageMeta);
   if (state.usageTileCollapsed) {
     const collapsedSummary = document.createElement("div");
     collapsedSummary.className = "mx-2 grid min-w-0 flex-1 grid-cols-4 items-center justify-items-center gap-1 text-[11px] leading-4 text-[#e5e7eb]";
@@ -2881,7 +2860,7 @@ async function loadMemos(options = {}) {
     return false;
   }
   const forceReload = Boolean(options.forceReload);
-  const usageJob = refreshUsageIfNeeded({ forceReload, autoTriggered });
+  const usageJob = Promise.resolve(false);
 
   try {
     const selectFirst = Boolean(options.selectFirst);
@@ -3294,6 +3273,20 @@ async function summarizeMemoAtPointer(ev) {
 
   if (isUsageOverviewPanelSelected()) {
     try {
+      showSummaryTooltip({
+        head: `summary (${activeModel})`,
+        body: "usage再取得中...",
+        isError: false,
+        followPointer: true
+      });
+      setStatus("Usage stats refreshing for AI summary...");
+      await refreshUsageStats({ forceReload: true, reason: "summary" });
+      showSummaryTooltip({
+        head: `summary (${activeModel})`,
+        body: "要約中...",
+        isError: false,
+        followPointer: true
+      });
       await refreshUsageOverviewSummaryIfNeeded({ forceReload: true });
       if (reqId !== summaryRequestSeq) return;
       if (state.usageOverviewAiSummaryError) {
@@ -3419,11 +3412,15 @@ function initEvents() {
   el.qInput.addEventListener("search", onFilterCleared);
   el.projectInput.addEventListener("search", onFilterCleared);
   el.typeSelect.addEventListener("change", () => {
-    maybeRunAutoRefresh(() => loadMemos({ autoTriggered: true }));
+    loadMemos({ forceReload: true }).catch((error) => {
+      setStatus(`Load error: ${error.message || error}`, true);
+    });
   });
   el.storageFilterSelect.addEventListener("change", () => {
     state.storageFilterKind = currentStorageFilterKind();
-    maybeRunAutoRefresh(() => loadMemos({ autoTriggered: true }));
+    loadMemos({ forceReload: true }).catch((error) => {
+      setStatus(`Load error: ${error.message || error}`, true);
+    });
   });
   el.autoRefreshIndicator.addEventListener("click", () => {
     state.autoRefreshEnabled = !state.autoRefreshEnabled;
@@ -3609,6 +3606,9 @@ async function initApp() {
     await loadRuntimeConfig();
     renderStorageInfo(null);
     await loadMemos();
+    refreshUsageStats({ forceReload: true }).catch((error) => {
+      setStatus(`Usage stats error: ${error.message || error}`, true);
+    });
   } catch (error) {
     setStatus(`Init error: ${error.message}`, true);
   }
