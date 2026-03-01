@@ -921,9 +921,10 @@ function normalizeMemoType(raw) {
   return value;
 }
 
-function normalizeString(raw, fieldName) {
+function normalizeString(raw, fieldName, options = {}) {
+  const allowEmpty = Boolean(options.allowEmpty);
   const value = String(raw || "").trim();
-  if (!value) {
+  if (!allowEmpty && !value) {
     throw new Error(`${fieldName} is required.`);
   }
   return value;
@@ -1672,7 +1673,7 @@ async function main() {
       const payload = {
         projectName: normalizeString(req.body.projectName, "projectName"),
         memoType: normalizeMemoType(req.body.memoType),
-        memoBody: normalizeString(req.body.memoBody, "memoBody"),
+        memoBody: normalizeString(req.body.memoBody, "memoBody", { allowEmpty: true }),
         threadTitle: normalizeString(req.body.threadTitle, "threadTitle"),
         deletable: normalizeBool(req.body.deletable, false),
         pinned: normalizeBool(req.body.pinned, false),
@@ -1702,7 +1703,7 @@ async function main() {
       const patch = {
         projectName: normalizeString(req.body.projectName, "projectName"),
         memoType: normalizeMemoType(req.body.memoType),
-        memoBody: normalizeString(req.body.memoBody, "memoBody"),
+        memoBody: normalizeString(req.body.memoBody, "memoBody", { allowEmpty: true }),
         threadTitle: normalizeString(req.body.threadTitle, "threadTitle"),
         storageKind: req.body.storageKind,
         attachments: req.body.attachments === undefined ? undefined : normalizeAttachmentsInput(req.body.attachments)

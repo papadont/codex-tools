@@ -11,6 +11,8 @@ const state = {
     memoSummaryModel: "gpt-4.1-nano",
     usageOverviewSummaryModel: "gpt-4o-mini"
   },
+  quickMemoId: null,
+  quickMemoEnsuring: false,
   editorBaseline: null,
   editorStorageKind: "firebase",
   hasInitialAutoSelection: false,
@@ -46,6 +48,10 @@ const state = {
 const USAGE_OVERVIEW_PANEL_ID = "__usage_overview__";
 const CODEX_USAGE_PANEL_ID = "__codex_usage__";
 const USAGE_PANEL_ID = "__firestore_usage__";
+const QUICK_MEMO_TITLE = "Quick Memo";
+const QUICK_MEMO_PROJECT_NAME = "codex-memo";
+const QUICK_MEMO_MEMO_TYPE = "keep";
+const QUICK_MEMO_LEGACY_PROJECT_NAMES = new Set(["common", QUICK_MEMO_PROJECT_NAME]);
 const USAGE_PANEL_HOURS = 24 * 14;
 const USAGE_FETCH_TIMEOUT_MS = 8000;
 const FIREBASE_USAGE_PAGE_URL = "https://console.firebase.google.com/project/hush-pointer/firestore/databases/-default-/usage/prev-24h";
@@ -67,6 +73,7 @@ function usageSourceFooterLines() {
 
 const el = {
   memoList: document.getElementById("memoList"),
+  memoSidebar: document.getElementById("memoSidebar"),
   usagePanelSlot: document.getElementById("usagePanelSlot"),
   appTitle: document.getElementById("appTitle"),
   qInput: document.getElementById("qInput"),
@@ -154,6 +161,11 @@ function setStatus(message, isError = false, tone = "default") {
     return;
   }
   el.status.classList.add("text-[#5d79a8]");
+}
+
+function syncStickySlotDivider() {
+  if (!el.memoSidebar || !el.usagePanelSlot) return;
+  el.usagePanelSlot.classList.toggle("sticky-slot-scrolled", Number(el.memoSidebar.scrollTop || 0) > 0);
 }
 
 function renderAutoRefreshIndicator() {
@@ -433,6 +445,101 @@ function attachmentPreviewUrl(item) {
   return "";
 }
 
+function buildQuickMemoSeed(storageKind = currentDefaultStorageKind()) {
+  return {
+    projectName: QUICK_MEMO_PROJECT_NAME,
+    memoType: QUICK_MEMO_MEMO_TYPE,
+    threadTitle: QUICK_MEMO_TITLE,
+    memoBody: "",
+    storageKind: normalizeStorageKind(storageKind, currentDefaultStorageKind()),
+    attachments: [],
+    deletable: false,
+    pinned: false
+  };
+}
+
+function matchesQuickMemoSignature(item) {
+  return Boolean(
+    item
+    && String(item.threadTitle || "") === QUICK_MEMO_TITLE
+    && QUICK_MEMO_LEGACY_PROJECT_NAMES.has(String(item.projectName || ""))
+    && String(item.memoType || "") === QUICK_MEMO_MEMO_TYPE
+  );
+}
+
+function normalizeQuickMemoItem(item) {
+  const base = buildQuickMemoSeed(item?.storageKind || currentDefaultStorageKind());
+  return {
+    ...base,
+    ...(item || {}),
+    projectName: QUICK_MEMO_PROJECT_NAME,
+    memoType: QUICK_MEMO_MEMO_TYPE,
+    threadTitle: QUICK_MEMO_TITLE,
+    deletable: false,
+    pinned: false,
+    storageKind: normalizeStorageKind(item?.storageKind, base.storageKind)
+  };
+}
+
+function updateQuickMemoStateFromItems() {
+  const found = state.items.find((item) => matchesQuickMemoSignature(item));
+  state.quickMemoId = found?.id || null;
+  return found ? normalizeQuickMemoItem(found) : null;
+}
+
+function getQuickMemoItem() {
+  if (state.quickMemoId) {
+    const byId = state.items.find((item) => item.id === state.quickMemoId);
+    if (byId) return normalizeQuickMemoItem(byId);
+  }
+  return updateQuickMemoStateFromItems();
+}
+
+function isQuickMemoItem(item) {
+  if (!item) return false;
+  if (state.quickMemoId && item.id === state.quickMemoId) return true;
+  return matchesQuickMemoSignature(item);
+}
+
+function isQuickMemoSelected() {
+  if (!state.selectedId) return false;
+  if (state.quickMemoId && state.selectedId === state.quickMemoId) return true;
+  const selected = state.items.find((memo) => memo.id === state.selectedId);
+  return isQuickMemoItem(selected);
+}
+
+function currentQuickMemoStorageKind() {
+  return normalizeStorageKind(getQuickMemoItem()?.storageKind, currentEditingStorageKind());
+}
+
+function firstMeaningfulBodyLine(text) {
+  const line = String(text || "")
+    .split(/\r?\n/)
+    .map((row) => row.trim())
+    .find(Boolean);
+  return line || QUICK_MEMO_TITLE;
+}
+
+function quickMemoSavePayload(overrides = {}) {
+  return {
+    ...buildQuickMemoSeed(currentQuickMemoStorageKind()),
+    memoBody: String(el.memoBodyInput.value || "").trim(),
+    storageKind: currentQuickMemoStorageKind(),
+    attachments: currentEditorAttachments(),
+    ...overrides,
+    projectName: QUICK_MEMO_PROJECT_NAME,
+    memoType: QUICK_MEMO_MEMO_TYPE,
+    threadTitle: QUICK_MEMO_TITLE,
+    deletable: false,
+    pinned: false
+  };
+}
+
+function isImageAttachment(item) {
+  return String(item?.kind || "").toLowerCase() === "image"
+    || String(item?.mimeType || "").toLowerCase().startsWith("image/");
+}
+
 function attachmentsSnapshotValue() {
   return JSON.stringify(
     currentEditorAttachments().map((item) => ({
@@ -478,7 +585,7 @@ function attachmentTooltipText(item) {
 
 function bodyContainsAttachment(attachmentId) {
   const escapedId = String(attachmentId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`!\\[[^\\]]*\\]\\(attachment:\\/\\/${escapedId}\\)`);
+  const pattern = new RegExp(`!?\\[[^\\]]*\\]\\(attachment:\\/\\/${escapedId}\\)`);
   return pattern.test(String(el.memoBodyInput.value || ""));
 }
 
@@ -498,7 +605,7 @@ function renderAttachmentList() {
     chip.title = attachmentTooltipText(item);
 
     const thumbUrl = attachmentPreviewUrl(item);
-    if (thumbUrl) {
+    if (thumbUrl && isImageAttachment(item)) {
       const thumb = document.createElement("img");
       thumb.src = thumbUrl;
       thumb.alt = item.caption || item.fileName || item.id;
@@ -507,18 +614,41 @@ function renderAttachmentList() {
       chip.appendChild(thumb);
     }
 
+    if (!isImageAttachment(item)) {
+      const icon = document.createElement("span");
+      icon.className = "inline-flex h-3.5 min-w-[1.1rem] items-center justify-center rounded-[3px] bg-[#eef2f8] px-1 text-[8px] font-semibold uppercase text-[#60708d]";
+      const ext = String(item.fileName || "").split(".").pop();
+      icon.textContent = (ext && ext !== item.fileName ? ext : "file").slice(0, 4);
+      icon.title = chip.title;
+      chip.appendChild(icon);
+    }
+
     const label = document.createElement("span");
     label.className = "max-w-[110px] truncate leading-none";
     label.textContent = item.fileName || item.caption || item.id;
     label.title = chip.title;
     chip.appendChild(label);
 
+    const resolvedUrl = attachmentPreviewUrl(item);
+    if (resolvedUrl) {
+      const openLink = document.createElement("a");
+      openLink.href = resolvedUrl;
+      openLink.target = "_blank";
+      openLink.rel = "noopener noreferrer";
+      openLink.className = "inline-flex h-4 items-center rounded px-1 text-[#5a7aab] hover:text-[#476998] hover:underline";
+      openLink.textContent = isImageAttachment(item) ? "Open" : "Download";
+      openLink.title = `${isImageAttachment(item) ? "Open" : "Download"} ${item.fileName || item.id}`;
+      chip.appendChild(openLink);
+    }
+
     const insertBtn = document.createElement("button");
     insertBtn.type = "button";
     insertBtn.className = "inline-flex h-4 w-4 items-center justify-center rounded text-[#6f7f9b] hover:text-[#5a6f94]";
     insertBtn.textContent = "+";
-    insertBtn.title = bodyContainsAttachment(item.id) ? "Image already inserted" : "Insert image into body";
-    insertBtn.disabled = isReadOnlyPanelSelected();
+    insertBtn.title = bodyContainsAttachment(item.id)
+      ? "Attachment already inserted"
+      : `Insert ${isImageAttachment(item) ? "image" : "file"} into body`;
+    insertBtn.disabled = isReadOnlyPanelSelected() || isQuickMemoSelected();
     insertBtn.addEventListener("click", () => {
       insertAttachmentMarkdown(item);
       updateSaveButtonState();
@@ -527,7 +657,7 @@ function renderAttachmentList() {
         renderMarkdownPreview();
       }
       el.memoBodyInput.focus();
-      setStatus(`Inserted image: ${item.fileName || item.id}`);
+      setStatus(`Inserted attachment: ${item.fileName || item.id}`);
     });
     chip.appendChild(insertBtn);
 
@@ -535,8 +665,8 @@ function renderAttachmentList() {
     removeBtn.type = "button";
     removeBtn.className = "inline-flex h-4 w-4 items-center justify-center rounded text-[#9c6b7e] hover:text-[#cf7896]";
     removeBtn.textContent = "x";
-    removeBtn.title = "Remove image";
-    removeBtn.disabled = isReadOnlyPanelSelected();
+    removeBtn.title = "Remove attachment";
+    removeBtn.disabled = isReadOnlyPanelSelected() || isQuickMemoSelected();
     removeBtn.addEventListener("click", () => {
       state.editorAttachments = currentEditorAttachments().filter((attachment) => attachment.id !== item.id);
       removeAttachmentMarkdown(item.id);
@@ -545,7 +675,7 @@ function renderAttachmentList() {
       if (getBodyMode() === "preview") {
         renderMarkdownPreview();
       }
-      setStatus(`Removed image: ${item.fileName || item.id}`);
+      setStatus(`Removed attachment: ${item.fileName || item.id}`);
     });
     chip.appendChild(removeBtn);
     el.attachmentList.appendChild(chip);
@@ -553,7 +683,10 @@ function renderAttachmentList() {
 }
 
 function insertAttachmentMarkdown(item) {
-  const token = `![${item.caption || item.fileName || item.id}](attachment://${item.id})`;
+  const label = item.caption || item.fileName || item.id;
+  const token = isImageAttachment(item)
+    ? `![${label}](attachment://${item.id})`
+    : `[${label}](attachment://${item.id})`;
   if (bodyContainsAttachment(item.id)) return;
   const input = el.memoBodyInput;
   const start = Number.isInteger(input.selectionStart) ? input.selectionStart : input.value.length;
@@ -1272,6 +1405,9 @@ function renderDateWithCacheIndicator(value) {
 }
 
 function currentPayload() {
+  if (isQuickMemoSelected()) {
+    return quickMemoSavePayload();
+  }
   return {
     projectName: el.projectNameInput.value.trim(),
     memoType: el.memoTypeInput.value,
@@ -1294,6 +1430,9 @@ function currentEditorSnapshot() {
 }
 
 function hasRequiredPayloadFields() {
+  if (isQuickMemoSelected()) {
+    return Boolean(el.memoBodyInput.value.trim());
+  }
   return Boolean(
     el.projectNameInput.value.trim() &&
     el.threadTitleInput.value.trim() &&
@@ -1402,6 +1541,7 @@ function renderStorageControls() {
   const selectedStorageKind = normalizeStorageKind(selectedMemo?.storageKind, "");
   const showEditSelector = Boolean(
     state.selectedId
+    && !isQuickMemoSelected()
     && !isSpecialPanelId(state.selectedId)
     && config.storageMode === "mixed"
     && editableStorageOptions.length > 1
@@ -1468,6 +1608,10 @@ function renderStorageInfo(item) {
 function renderEditorDividerAccent(storageKind = "") {
   if (!el.editorDivider) return;
   el.editorDivider.className = "mb-2 mt-1 border-t-2";
+  if (isQuickMemoSelected()) {
+    el.editorDivider.classList.add("border-[#d68e25]");
+    return;
+  }
   const kind = normalizeStorageKind(storageKind, "");
   if (kind === "icloud") {
     el.editorDivider.classList.add("border-[#9eaecd]");
@@ -1537,12 +1681,14 @@ function extractLocalPaths(text) {
 }
 
 function hasBodyLink(text) {
-  return extractLinks(text).length > 0 || extractLocalPaths(text).length > 0;
+  return extractLinks(text).length > 0
+    || extractLocalPaths(text).length > 0
+    || /\[[^\]]+\]\(attachment:\/\/[A-Za-z0-9._-]+\)/.test(String(text || ""));
 }
 
 function hasBodyImage(item) {
   const attachments = Array.isArray(item?.attachments) ? item.attachments : [];
-  if (attachments.length > 0) return true;
+  if (attachments.some((attachment) => isImageAttachment(attachment))) return true;
   return /!\[[^\]]*\]\((?:attachment:\/\/|https?:\/\/|\/)/.test(String(item?.memoBody || ""));
 }
 
@@ -1749,7 +1895,7 @@ function applyAttachmentPreviewLinks(root) {
     if (!resolved) return;
     node.setAttribute(attr, resolved);
     if (node.tagName === "A") {
-      node.setAttribute("data-local-path", "");
+      node.setAttribute("data-attachment-link", "true");
       node.setAttribute("target", "_blank");
       node.setAttribute("rel", "noopener noreferrer");
     }
@@ -1895,7 +2041,7 @@ function sortMemosForList(items) {
 }
 
 function listItemsForView() {
-  let items = state.items;
+  let items = state.items.filter((item) => !isQuickMemoItem(item));
   const storageFilterKind = currentStorageFilterKind();
   if (storageFilterKind) {
     items = items.filter((item) => normalizeStorageKind(item.storageKind) === storageFilterKind);
@@ -1952,7 +2098,108 @@ function refreshUsageStats(options = {}) {
 }
 
 function syncDeleteButtonLabel() {
+  if (isQuickMemoSelected()) {
+    el.deleteBtn.textContent = "Clear";
+    return;
+  }
   el.deleteBtn.textContent = state.showOnlyDeletable ? "ALL" : "Delete";
+}
+
+function syncQuickMemoEditorState() {
+  const active = isQuickMemoSelected();
+  el.threadTitleInput.classList.toggle("quick-memo-thread", active);
+  el.saveBtn.title = active ? "Save Quick Memo (Shift: save as new memo)" : "Save";
+}
+
+async function ensureQuickMemoExists() {
+  const existing = getQuickMemoItem();
+  if (existing) return existing;
+  if (state.quickMemoEnsuring) return null;
+  state.quickMemoEnsuring = true;
+  try {
+    const data = await request("/api/memos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildQuickMemoSeed(currentDefaultStorageKind()))
+    });
+    const item = normalizeQuickMemoItem(data.item);
+    state.items = [...state.items.filter((memo) => !isQuickMemoItem(memo)), item];
+    state.quickMemoId = item.id;
+    renderList();
+    return item;
+  } catch (error) {
+    setStatus(`Quick Memo create error: ${error.message}`, true);
+    return null;
+  } finally {
+    state.quickMemoEnsuring = false;
+  }
+}
+
+async function saveQuickMemo({ saveAsNew = false } = {}) {
+  const validationError = currentPayloadValidationError();
+  if (validationError) {
+    setStatus(validationError, true);
+    return;
+  }
+
+  try {
+    if (saveAsNew) {
+      const data = await request("/api/memos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectName: QUICK_MEMO_PROJECT_NAME,
+          memoType: "memo",
+          threadTitle: firstMeaningfulBodyLine(el.memoBodyInput.value),
+          memoBody: String(el.memoBodyInput.value || "").trim(),
+          storageKind: currentQuickMemoStorageKind(),
+          attachments: currentEditorAttachments()
+        })
+      });
+      fillEditor(data.item, { fromCache: false });
+      setStatus(`Created: ${data.item.id}`);
+      await loadMemos();
+      return;
+    }
+
+    const quickMemo = await ensureQuickMemoExists();
+    if (!quickMemo?.id) return;
+    const data = await request(`/api/memos/${encodeURIComponent(quickMemo.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(quickMemoSavePayload())
+    });
+    fillEditor(normalizeQuickMemoItem(data.item), { fromCache: false, editorStorageKind: data.item?.storageKind });
+    setStatus(`Updated: ${data.item.id}`);
+    await loadMemos();
+  } catch (error) {
+    setStatus(`Save error: ${error.message}`, true);
+  }
+}
+
+async function clearQuickMemo() {
+  const quickMemo = await ensureQuickMemoExists();
+  if (!quickMemo?.id) return;
+  const ok = window.confirm("Clear Quick Memo? body and attachments will be removed.");
+  if (!ok) {
+    setStatus("Clear cancelled", true);
+    return;
+  }
+  try {
+    const data = await request(`/api/memos/${encodeURIComponent(quickMemo.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(quickMemoSavePayload({
+        memoBody: "",
+        attachments: []
+      }))
+    });
+    fillEditor(normalizeQuickMemoItem(data.item), { fromCache: false, editorStorageKind: data.item?.storageKind });
+    setStatus("Quick Memo cleared", false, "force");
+    await loadMemos();
+  } catch (error) {
+    setStatus(`Clear error: ${error.message}`, true);
+  }
 }
 
 function memoTypeBadgeClass(memoType) {
@@ -2129,6 +2376,7 @@ function renderList() {
   if (el.usagePanelSlot) {
     el.usagePanelSlot.innerHTML = "";
   }
+  const quickMemoItem = updateQuickMemoStateFromItems();
   const items = sortMemosForList(listItemsForView());
 
   const usageLi = document.createElement("li");
@@ -2527,6 +2775,84 @@ function renderList() {
     el.memoList.appendChild(usageLi);
   }
 
+  if (quickMemoItem) {
+    const quickLi = document.createElement("li");
+    quickLi.className = [
+      "group",
+      "relative",
+      "cursor-pointer",
+      "mt-[3px]",
+      "px-0.5",
+      "py-0.5",
+      "transition-opacity",
+      "hover:opacity-95"
+    ].join(" ");
+
+    const quickActive = isQuickMemoSelected();
+    const card = document.createElement("div");
+    card.className = [
+      "relative",
+      "overflow-hidden",
+      "rounded-lg",
+      "border",
+      "px-2.5",
+      "py-2",
+      quickActive
+        ? "border-[#d7a14a] bg-[#fefdfb]"
+        : "border-[#e0b46d] bg-[#f9f6f0]"
+    ].join(" ").trim();
+
+    const accent = document.createElement("span");
+    accent.className = "absolute inset-y-0 left-0 w-[4px] bg-[#f0a020]";
+    card.appendChild(accent);
+
+    const top = document.createElement("div");
+    top.className = "flex items-center gap-1";
+    const title = document.createElement("strong");
+    title.className = "block text-[13px] leading-4 text-[#4f5f7e]";
+    title.textContent = QUICK_MEMO_TITLE;
+    top.appendChild(title);
+
+    const meta = document.createElement("div");
+    meta.className = "mt-0.5 flex min-w-0 items-center gap-1";
+    const typeBadge = document.createElement("span");
+    typeBadge.className = "inline-flex h-3.5 shrink-0 items-center rounded-md border border-[#db9a37] bg-[#e9ae57] px-1 text-[9px] font-semibold leading-none text-[#fff8ee]";
+    typeBadge.textContent = "sticky";
+    const dateText = document.createElement("small");
+    dateText.className = "shrink-0 whitespace-nowrap text-[9px] leading-3.5 text-[#7f8aa3]";
+    dateText.textContent = formatDate(quickMemoItem.updatedAtISO || quickMemoItem.createdAtISO);
+    meta.appendChild(typeBadge);
+    meta.appendChild(dateText);
+
+    if (hasBodyLink(quickMemoItem.memoBody || "")) {
+      const linkBadge = document.createElement("span");
+      linkBadge.className = "inline-flex h-3.5 shrink-0 items-center rounded border border-[#d6dce8] px-1 text-[8px] font-medium leading-none text-[#7a859e]";
+      linkBadge.textContent = "link";
+      linkBadge.title = "Body contains link/path";
+      meta.appendChild(linkBadge);
+    }
+
+    if (hasBodyImage(quickMemoItem)) {
+      const imgBadge = document.createElement("span");
+      imgBadge.className = "inline-flex h-3.5 shrink-0 items-center rounded border border-[#dcd8ef] px-1 text-[8px] font-medium leading-none text-[#7d78a0]";
+      imgBadge.textContent = "img";
+      imgBadge.title = "Body contains image";
+      meta.appendChild(imgBadge);
+    }
+
+    card.appendChild(top);
+    card.appendChild(meta);
+    quickLi.appendChild(card);
+    quickLi.addEventListener("click", () => {
+      fillEditor(quickMemoItem, { fromCache: false, editorStorageKind: quickMemoItem.storageKind });
+    });
+    if (el.usagePanelSlot) {
+      el.usagePanelSlot.appendChild(quickLi);
+    } else {
+      el.memoList.appendChild(quickLi);
+    }
+  }
+
   for (const item of items) {
     const li = document.createElement("li");
     const isActive = item.id === state.selectedId;
@@ -2710,43 +3036,45 @@ function renderList() {
 }
 
 function fillEditor(item, options = {}) {
-  const isOverviewPanel = item && item.id === USAGE_OVERVIEW_PANEL_ID;
-  const isUsagePanel = item && item.id === USAGE_PANEL_ID;
-  const isCodexPanel = item && item.id === CODEX_USAGE_PANEL_ID;
+  const normalizedItem = isQuickMemoItem(item) ? normalizeQuickMemoItem(item) : item;
+  const isOverviewPanel = normalizedItem && normalizedItem.id === USAGE_OVERVIEW_PANEL_ID;
+  const isUsagePanel = normalizedItem && normalizedItem.id === USAGE_PANEL_ID;
+  const isCodexPanel = normalizedItem && normalizedItem.id === CODEX_USAGE_PANEL_ID;
+  const isQuickMemo = isQuickMemoItem(normalizedItem);
   const isReadOnlyPanel = Boolean(isOverviewPanel || isUsagePanel || isCodexPanel);
-  state.selectedId = item && item.id ? item.id : null;
+  state.selectedId = normalizedItem && normalizedItem.id ? normalizedItem.id : null;
   state.selectedCacheHit = Boolean(options.fromCache);
   if (isReadOnlyPanel) {
     setEditorStorageKind(currentDefaultStorageKind());
-  } else if (item?.storageKind) {
-    setEditorStorageKind(item.storageKind);
+  } else if (normalizedItem?.storageKind) {
+    setEditorStorageKind(normalizedItem.storageKind);
   } else if (!state.selectedId) {
     setEditorStorageKind(options.editorStorageKind || currentDefaultStorageKind());
   }
   renderStorageControls();
-  el.projectNameInput.value = item?.projectName || "";
-  el.memoTypeInput.value = item?.memoType || "memo";
-  el.threadTitleInput.value = item?.threadTitle || "";
-  el.memoBodyInput.value = item?.memoBody || "";
-  state.editorAttachments = normalizeEditorAttachments(item?.attachments);
+  el.projectNameInput.value = normalizedItem?.projectName || "";
+  el.memoTypeInput.value = normalizedItem?.memoType || "memo";
+  el.threadTitleInput.value = normalizedItem?.threadTitle || "";
+  el.memoBodyInput.value = normalizedItem?.memoBody || "";
+  state.editorAttachments = normalizeEditorAttachments(normalizedItem?.attachments);
   renderAttachmentList();
-  renderStorageInfo(state.selectedId ? item : null);
+  renderStorageInfo(state.selectedId ? normalizedItem : null);
   renderEditorDividerAccent(isReadOnlyPanel ? "" : currentEditingStorageKind());
   renderSummaryButtonTooltip();
   if (el.dateText) {
     el.dateText.textContent = isUsagePanel
       ? formatDate(state.usageFetchedAtISO || state.usageSummary?.endTime)
       : isOverviewPanel
-        ? formatDate(state.codexUsageFetchedAtISO || state.usageFetchedAtISO || item?.updatedAtISO)
+        ? formatDate(state.codexUsageFetchedAtISO || state.usageFetchedAtISO || normalizedItem?.updatedAtISO)
       : isCodexPanel
         ? formatDate(state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO)
-        : renderDateWithCacheIndicator(item?.updatedAtISO || item?.createdAtISO || item?.datetimeISO);
+        : renderDateWithCacheIndicator(normalizedItem?.updatedAtISO || normalizedItem?.createdAtISO || normalizedItem?.datetimeISO);
   }
-  el.projectNameInput.readOnly = isReadOnlyPanel;
-  el.threadTitleInput.readOnly = isReadOnlyPanel;
+  el.projectNameInput.readOnly = isReadOnlyPanel || isQuickMemo;
+  el.threadTitleInput.readOnly = isReadOnlyPanel || isQuickMemo;
   el.memoBodyInput.readOnly = isReadOnlyPanel;
-  el.memoTypeInput.disabled = isReadOnlyPanel;
-  el.addImageBtn.disabled = isReadOnlyPanel;
+  el.memoTypeInput.disabled = isReadOnlyPanel || isQuickMemo;
+  el.addImageBtn.disabled = isReadOnlyPanel || isQuickMemo;
   state.editorBaseline = isReadOnlyPanel ? null : currentEditorSnapshot();
   updateSaveButtonState();
   el.deleteBtn.disabled = isReadOnlyPanel;
@@ -2755,17 +3083,20 @@ function fillEditor(item, options = {}) {
   el.downloadBtn.disabled = false;
   el.shareBtn.disabled = false;
   syncDeleteButtonLabel();
+  syncQuickMemoEditorState();
   el.deleteBtn.title = isReadOnlyPanel
     ? "Delete is disabled in usage panel"
-    : state.showOnlyDeletable
-      ? "ALL: delete all deletable docs (Shift: filter off)"
-      : "ALL: delete all deletable docs (Shift: filter on)";
+    : isQuickMemo
+      ? "Clear Quick Memo"
+      : state.showOnlyDeletable
+        ? "ALL: delete all deletable docs (Shift: filter off)"
+        : "ALL: delete all deletable docs (Shift: filter on)";
   if (!el.bodyModeToggle.dataset.mode) {
     setBodyMode("preview");
   }
   updateBodyMode();
   renderList();
-  setStatus(isReadOnlyPanel ? "Usage detail view" : "");
+  setStatus(isReadOnlyPanel ? "Usage detail view" : (isQuickMemo ? "Quick Memo" : ""));
 }
 
 function applyUpdatedMemo(updated) {
@@ -2874,6 +3205,12 @@ async function loadMemos(options = {}) {
 
     const data = await request(`/api/memos?${params.toString()}`);
     state.items = data.items || [];
+    updateQuickMemoStateFromItems();
+    if (!state.quickMemoId && !state.quickMemoEnsuring) {
+      ensureQuickMemoExists().catch((error) => {
+        setStatus(`Quick Memo create error: ${error.message || error}`, true);
+      });
+    }
     const listFromCache = state.lastResponseCacheHit;
     const visibleItems = getVisibleItemsSorted();
     if (selectFirst && visibleItems.length > 0) {
@@ -2891,6 +3228,7 @@ async function loadMemos(options = {}) {
     }
     if (
       !isSpecialPanelId(state.selectedId) &&
+      !isQuickMemoSelected() &&
       state.showOnlyDeletable &&
       state.selectedId &&
       !visibleItems.some((memo) => memo.id === state.selectedId)
@@ -2922,15 +3260,22 @@ async function loadMemos(options = {}) {
 async function loadMemo(id) {
   try {
     const data = await request(`/api/memos/${encodeURIComponent(id)}`);
-    fillEditor(data.item, { fromCache: state.lastResponseCacheHit, editorStorageKind: data.item?.storageKind });
+    fillEditor(isQuickMemoItem(data.item) ? normalizeQuickMemoItem(data.item) : data.item, {
+      fromCache: state.lastResponseCacheHit,
+      editorStorageKind: data.item?.storageKind
+    });
   } catch (error) {
     setStatus(`Detail fetch error: ${error.message}`, true);
   }
 }
 
-async function saveMemo() {
+async function saveMemo(ev) {
   if (isReadOnlyPanelSelected()) {
     setStatus("Usage panel is read-only", true);
+    return;
+  }
+  if (isQuickMemoSelected()) {
+    await saveQuickMemo({ saveAsNew: Boolean(ev?.shiftKey) });
     return;
   }
   const payload = currentPayload();
@@ -2965,6 +3310,10 @@ async function saveMemo() {
 }
 
 async function deleteSelectedMemo() {
+  if (isQuickMemoSelected()) {
+    setStatus("Quick Memo cannot be deleted", true);
+    return;
+  }
   if (isReadOnlyPanelSelected()) {
     setStatus("Usage panel cannot be deleted", true);
     return;
@@ -3048,11 +3397,15 @@ async function deleteAllDeletableMemos() {
 }
 
 async function deleteMemo(ev) {
+  if (isQuickMemoSelected()) {
+    await clearQuickMemo();
+    return;
+  }
   if (ev && ev.shiftKey) {
     state.showOnlyDeletable = !state.showOnlyDeletable;
     syncDeleteButtonLabel();
     const visibleItems = getVisibleItemsSorted();
-    if (state.showOnlyDeletable && state.selectedId && !isSpecialPanelId(state.selectedId) && !visibleItems.some((memo) => memo.id === state.selectedId)) {
+    if (state.showOnlyDeletable && state.selectedId && !isSpecialPanelId(state.selectedId) && !isQuickMemoSelected() && !visibleItems.some((memo) => memo.id === state.selectedId)) {
       if (visibleItems.length > 0) {
         fillEditor(visibleItems[0], { fromCache: false });
       } else {
@@ -3363,6 +3716,9 @@ async function copyBodyText() {
 }
 
 function initEvents() {
+  if (el.memoSidebar) {
+    el.memoSidebar.addEventListener("scroll", syncStickySlotDivider, { passive: true });
+  }
   document.addEventListener("mousemove", rememberPointerPosition, { passive: true });
   document.addEventListener("click", (ev) => {
     const target = ev.target;
@@ -3600,12 +3956,14 @@ setBodyMode("preview");
 updateBodyMode();
 renderAutoRefreshIndicator();
 renderSummaryButtonTooltip();
+syncStickySlotDivider();
 
 async function initApp() {
   try {
     await loadRuntimeConfig();
     renderStorageInfo(null);
     await loadMemos();
+    await ensureQuickMemoExists();
     refreshUsageStats({ forceReload: true }).catch((error) => {
       setStatus(`Usage stats error: ${error.message || error}`, true);
     });
