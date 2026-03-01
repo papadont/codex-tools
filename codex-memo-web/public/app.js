@@ -84,6 +84,7 @@ const el = {
   projectNameInput: document.getElementById("projectNameInput"),
   memoTypeInput: document.getElementById("memoTypeInput"),
   threadTitleInput: document.getElementById("threadTitleInput"),
+  editorDivider: document.getElementById("editorDivider"),
   addImageBtn: document.getElementById("addImageBtn"),
   attachmentInput: document.getElementById("attachmentInput"),
   attachmentList: document.getElementById("attachmentList"),
@@ -264,8 +265,7 @@ function formatDate(value) {
   const dd = pad2(date.getDate());
   const hh = pad2(date.getHours());
   const mi = pad2(date.getMinutes());
-  const ss = pad2(date.getSeconds());
-  return `${yyyy}/${mm}/${dd} ${hh}:${mi}:${ss}`;
+  return `${yyyy}/${mm}/${dd} ${hh}:${mi}`;
 }
 
 function normalizeStorageKind(value, fallback = "firebase") {
@@ -306,23 +306,23 @@ function storageBadgeClass(value) {
 function modeBadgeClass(value, storageMode = "mixed") {
   if (storageMode !== "fixed") {
     return {
-      border: "border-[#b7aeca]",
+      border: "border-[#cfd4dd]",
       bg: "bg-transparent",
-      text: "text-[#8a5f74]"
+      text: "text-[#7a8493]"
     };
   }
   switch (normalizeStorageKind(value)) {
     case "icloud":
       return {
-        border: "border-[#bdd1e8]",
+        border: "border-[#9eaecd]",
         bg: "bg-transparent",
-        text: "text-[#5678a3]"
+        text: "text-[#6e84ad]"
       };
     default:
       return {
-        border: "border-[#d6c3ac]",
+        border: "border-[#e2b1c2]",
         bg: "bg-transparent",
-        text: "text-[#8b6644]"
+        text: "text-[#cf7896]"
       };
   }
 }
@@ -1237,10 +1237,16 @@ function renderStorageControls() {
     "text-[#8a5f74]",
     "border-[#c8ced6]",
     "text-[#5e6877]",
+    "border-[#cfd4dd]",
+    "text-[#7a8493]",
     "border-[#bdd1e8]",
     "text-[#5678a3]",
+    "border-[#9eaecd]",
+    "text-[#6e84ad]",
     "border-[#d6c3ac]",
-    "text-[#8b6644]"
+    "text-[#8b6644]",
+    "border-[#e2b1c2]",
+    "text-[#cf7896]"
   );
   el.modeBadge.classList.add(badgeTone.border, badgeTone.bg, badgeTone.text);
   const tooltipLines = config.storageMode === "fixed"
@@ -1349,6 +1355,21 @@ function renderStorageInfo(item) {
   el.storageInfo.className = "hidden";
 }
 
+function renderEditorDividerAccent(storageKind = "") {
+  if (!el.editorDivider) return;
+  el.editorDivider.className = "mb-2 mt-1 border-t-2";
+  const kind = normalizeStorageKind(storageKind, "");
+  if (kind === "icloud") {
+    el.editorDivider.classList.add("border-[#9eaecd]");
+    return;
+  }
+  if (kind === "firebase") {
+    el.editorDivider.classList.add("border-[#e2b1c2]");
+    return;
+  }
+  el.editorDivider.classList.add("border-[#ece7df]");
+}
+
 function escapeHtml(text) {
   return String(text || "")
     .replaceAll("&", "&amp;")
@@ -1407,6 +1428,12 @@ function extractLocalPaths(text) {
 
 function hasBodyLink(text) {
   return extractLinks(text).length > 0 || extractLocalPaths(text).length > 0;
+}
+
+function hasBodyImage(item) {
+  const attachments = Array.isArray(item?.attachments) ? item.attachments : [];
+  if (attachments.length > 0) return true;
+  return /!\[[^\]]*\]\((?:attachment:\/\/|https?:\/\/|\/)/.test(String(item?.memoBody || ""));
 }
 
 function normalizePathToken(raw) {
@@ -2416,9 +2443,12 @@ function renderList() {
     const isDeletable = Boolean(item.deletable);
     const pinBlocked = !isPinned && isDeletable;
     const delBlocked = !isDeletable && isPinned;
+    const storageKind = normalizeStorageKind(item.storageKind, "firebase");
+    const accentClass = storageKind === "icloud" ? "bg-[#6e84ad]" : "bg-[#cf7896]";
     li.className = [
       "group",
       "relative",
+      "overflow-hidden",
       "cursor-pointer",
       "rounded-lg",
       "border",
@@ -2432,6 +2462,10 @@ function renderList() {
           ? "border-[#9aabc9] bg-[#f9f6f0]"
           : "border-[#e5ddd2] bg-[#f9f6f0]"
     ].join(" ");
+
+    const accent = document.createElement("span");
+    accent.className = `absolute inset-y-0 left-0 w-[3px] ${accentClass}`;
+    li.appendChild(accent);
 
     const topRow = document.createElement("div");
     topRow.className = "flex items-center gap-1";
@@ -2459,21 +2493,6 @@ function renderList() {
       memoTypeBadgeClass(item.memoType)
     ].join(" ");
     typeBadge.textContent = displayMemoTypeLabel(item.memoType);
-    const storageBadge = document.createElement("span");
-    storageBadge.className = [
-      "inline-flex",
-      "h-3.5",
-      "shrink-0",
-      "items-center",
-      "rounded-md",
-      "border",
-      "px-1",
-      "text-[9px]",
-      "font-semibold",
-      "leading-none",
-      storageBadgeClass(item.storageKind)
-    ].join(" ");
-    storageBadge.textContent = storageBadgeText(item.storageKind);
     const metaText = document.createElement("small");
     metaText.className = "block min-w-0 truncate whitespace-nowrap text-[9px] leading-3.5 text-[#78829a]";
     metaText.textContent = `${item.projectName}`;
@@ -2481,7 +2500,6 @@ function renderList() {
     dateText.className = "shrink-0 whitespace-nowrap text-[9px] leading-3.5 text-[#7f8aa3]";
     dateText.textContent = formatDate(item.updatedAtISO || item.datetimeISO || item.createdAtISO);
     meta.appendChild(typeBadge);
-    meta.appendChild(storageBadge);
     meta.appendChild(metaText);
     meta.appendChild(dateText);
 
@@ -2491,6 +2509,14 @@ function renderList() {
       linkBadge.textContent = "link";
       linkBadge.title = "Body contains link/path";
       meta.appendChild(linkBadge);
+    }
+
+    if (hasBodyImage(item)) {
+      const imgBadge = document.createElement("span");
+      imgBadge.className = "inline-flex h-3.5 shrink-0 items-center rounded border border-[#dcd8ef] px-1 text-[8px] font-medium leading-none text-[#7d78a0]";
+      imgBadge.textContent = "img";
+      imgBadge.title = "Body contains image";
+      meta.appendChild(imgBadge);
     }
 
     li.appendChild(topRow);
@@ -2510,8 +2536,8 @@ function renderList() {
       "items-center",
       "justify-center",
       isPinned
-        ? "text-[#2563eb]"
-        : "text-[#94a3b8] hover:text-[#0ea5ff] focus-visible:text-[#0ea5ff]",
+        ? "text-[#6e84ad]"
+        : "text-[#94a3b8] hover:text-[#6e84ad] focus-visible:text-[#6e84ad]",
       isPinned
         ? "opacity-100 pointer-events-auto"
         : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto",
@@ -2569,10 +2595,8 @@ function renderList() {
     const delIconClass = "h-full w-full stroke-current transition-colors";
     delBtn.innerHTML = [
       `<svg viewBox="0 0 24 24" aria-hidden="true" class="${delIconClass}" stroke-width="1.7">`,
-      '<path d="M5 7h14" stroke-linecap="round"></path>',
-      '<path d="M9 7V5h6v2" stroke-linecap="round" stroke-linejoin="round"></path>',
-      '<rect x="7" y="7" width="10" height="12" rx="1.5" fill="none"></rect>',
-      '<path d="M10 10.5v5.5M14 10.5v5.5" stroke-linecap="round"></path>',
+      '<path d="m6 9 6-4 6 4v8l-6 4-6-4Z" fill="none" stroke-linejoin="round"></path>',
+      '<circle cx="12" cy="13" r="1.8" fill="currentColor" stroke="none"></circle>',
       "</svg>"
     ].join("");
     delBtn.title = delBlocked ? "DEL is disabled while PIN is on" : (isDeletable ? "Unset deletable" : "Set deletable");
@@ -2616,6 +2640,7 @@ function fillEditor(item, options = {}) {
   state.editorAttachments = normalizeEditorAttachments(item?.attachments);
   renderAttachmentList();
   renderStorageInfo(state.selectedId ? item : null);
+  renderEditorDividerAccent(isReadOnlyPanel ? "" : currentEditingStorageKind());
   el.dateText.textContent = isUsagePanel
     ? formatDate(state.usageFetchedAtISO || state.usageSummary?.endTime)
     : isOverviewPanel
@@ -3265,6 +3290,7 @@ function initEvents() {
     if (!state.selectedId && !isReadOnlyPanelSelected()) {
       setStatus(`Next new memo: ${displayStorageKindLabel(currentDefaultStorageKind())}`);
       renderStorageInfo(null);
+      renderEditorDividerAccent(currentEditingStorageKind());
     }
     if (isSpecialPanelId(state.selectedId)) {
       renderStorageInfo({ storageKind: currentEditingStorageKind() });
@@ -3275,6 +3301,7 @@ function initEvents() {
     setEditorStorageKind(el.editStorageSelect.value);
     renderStorageControls();
     renderStorageInfo({ storageKind: currentEditingStorageKind() });
+    renderEditorDividerAccent(currentEditingStorageKind());
     updateSaveButtonState();
     setStatus(`Change on save: ${displayStorageKindLabel(currentEditingStorageKind())}`);
   });
