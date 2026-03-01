@@ -7,7 +7,9 @@ const state = {
     defaultStorageKind: "firebase",
     availableAdapters: ["icloud", "firebase"],
     allowedAdapters: ["icloud", "firebase"],
-    adapterDetails: []
+    adapterDetails: [],
+    memoSummaryModel: "gpt-4.1-nano",
+    usageOverviewSummaryModel: "gpt-4o-mini"
   },
   editorBaseline: null,
   editorStorageKind: "firebase",
@@ -125,8 +127,11 @@ async function loadRuntimeConfig() {
     allowedAdapters: Array.isArray(data.allowedAdapters) && data.allowedAdapters.length
       ? data.allowedAdapters.map((item) => normalizeStorageKind(item))
       : ["icloud", "firebase"],
-    adapterDetails: Array.isArray(data.adapterDetails) ? data.adapterDetails : []
+    adapterDetails: Array.isArray(data.adapterDetails) ? data.adapterDetails : [],
+    memoSummaryModel: String(data.memoSummaryModel || "gpt-4.1-nano").trim() || "gpt-4.1-nano",
+    usageOverviewSummaryModel: String(data.usageOverviewSummaryModel || "gpt-4o-mini").trim() || "gpt-4o-mini"
   };
+  renderSummaryButtonTooltip(state.runtimeConfig.memoSummaryModel);
   renderStorageControls();
 }
 
@@ -157,8 +162,15 @@ function renderAutoRefreshIndicator() {
     : "Auto refresh OFF";
   el.autoRefreshIndicator.setAttribute("aria-pressed", state.autoRefreshEnabled ? "true" : "false");
   el.autoRefreshIndicator.className = state.autoRefreshEnabled
-    ? "h-3 w-3 rounded-full border border-[#8eb991] bg-[#8fcf95] shadow-[0_0_0_1px_rgba(255,255,255,0.55)_inset,0_0_5px_rgba(143,207,149,0.55)]"
-    : "h-3 w-3 rounded-full border border-[#bfc6d1] bg-[#e7eaf0]";
+    ? "h-2.5 w-2.5 rounded-full border border-[#8eb991] bg-[#8fcf95] shadow-[0_0_0_1px_rgba(255,255,255,0.55)_inset,0_0_5px_rgba(143,207,149,0.55)]"
+    : "h-2.5 w-2.5 rounded-full border border-[#bfc6d1] bg-[#e7eaf0]";
+}
+
+function renderSummaryButtonTooltip(modelName = "") {
+  if (!el.summaryBtn) return;
+  const fallbackModel = String(state.runtimeConfig?.memoSummaryModel || "").trim() || "gpt-4.1-nano";
+  const model = String(modelName || "").trim() || fallbackModel;
+  el.summaryBtn.title = `AI summary (${model})`;
 }
 
 function notifyAutoRefreshDisabled() {
@@ -744,6 +756,10 @@ function boldPercent(value, digits = 1) {
   return `**${formatPercent(value, digits)}**`;
 }
 
+function formatPeakPaceMetric(label, value) {
+  return `${label} ${boldPercent(value, 0)}`;
+}
+
 function quoteMarkdownLines(text) {
   const raw = String(text || "").trim();
   if (!raw) return [];
@@ -799,11 +815,13 @@ async function refreshUsageOverviewSummaryIfNeeded(options = {}) {
       });
       state.usageOverviewAiSummary = String(result.summary || "").trim();
       state.usageOverviewAiSummaryModel = String(result.model || "").trim();
+      renderSummaryButtonTooltip(state.usageOverviewAiSummaryModel);
       state.usageOverviewAiSummaryError = "";
       state.usageOverviewAiSummaryKey = key;
     } catch (error) {
       state.usageOverviewAiSummary = "";
       state.usageOverviewAiSummaryModel = "";
+      renderSummaryButtonTooltip("");
       state.usageOverviewAiSummaryError = String(error.message || error || "Failed to summarize usage overview");
       state.usageOverviewAiSummaryKey = key;
     } finally {
@@ -835,6 +853,7 @@ function getFirestoreTodaySnapshot() {
   const perDay = Array.isArray(state.usageSummary?.perDay) ? state.usageSummary.perDay : [];
   const today = perDay.find((d) => d.date === todayKey) || perDay[perDay.length - 1] || { read: 0, write: 0, delete: 0, date: todayKey };
   const recent = perDay.slice(-14);
+  const recentExcludingToday = recent.filter((d) => String(d?.date || "") !== String(today?.date || ""));
   const limits = state.usageSummary?.limitsDaily || { read: 50000, write: 20000, delete: 20000 };
   const ratePercent = {
     read: Number(today?.ratePercent?.read ?? ((Number(today.read || 0) / Math.max(1, Number(limits.read || 1))) * 100)),
@@ -842,9 +861,9 @@ function getFirestoreTodaySnapshot() {
     delete: Number(today?.ratePercent?.delete ?? ((Number(today.delete || 0) / Math.max(1, Number(limits.delete || 1))) * 100))
   };
   const maxInRecent = {
-    read: Math.max(1, ...recent.map((d) => Number(d.read || 0))),
-    write: Math.max(1, ...recent.map((d) => Number(d.write || 0))),
-    delete: Math.max(1, ...recent.map((d) => Number(d.delete || 0)))
+    read: Math.max(1, ...recentExcludingToday.map((d) => Number(d.read || 0))),
+    write: Math.max(1, ...recentExcludingToday.map((d) => Number(d.write || 0))),
+    delete: Math.max(1, ...recentExcludingToday.map((d) => Number(d.delete || 0)))
   };
   const relativePercent = {
     read: (Number(today.read || 0) / Math.max(1, Number(maxInRecent.read || 1))) * 100,
@@ -989,8 +1008,8 @@ function buildUsageOverviewBody() {
       ? `- free-tier: R ${boldPercent(fs.ratePercent.read, 1)} / W ${boldPercent(fs.ratePercent.write, 1)} / D ${boldPercent(fs.ratePercent.delete, 1)}`
       : `- status: ${state.usageError ? `error (${state.usageError})` : "loading"}`,
     state.usageSummary
-      ? `- pace vs free-tier: R ${boldPercent(fs.relativePercent.read, 0)} / W ${boldPercent(fs.relativePercent.write, 0)} / D ${boldPercent(fs.relativePercent.delete, 0)} of recent peak`
-      : "- pace vs free-tier: -",
+      ? `- pace vs recent peak (excl today): ${formatPeakPaceMetric("R", fs.relativePercent.read)} / ${formatPeakPaceMetric("W", fs.relativePercent.write)} / ${formatPeakPaceMetric("D", fs.relativePercent.delete)}`
+      : "- pace vs recent peak (excl today): -",
     "",
     "### Firestore 14d details",
     "",
@@ -2060,7 +2079,7 @@ function renderList() {
       const line = document.createElement("div");
       line.className = "flex w-full items-center gap-1";
       const label = document.createElement("span");
-      label.className = "w-5 text-[9px] font-semibold leading-3 text-[#eef4ff]";
+      label.className = "w-7 text-[9px] font-semibold leading-3 text-[#eef4ff]";
       label.textContent = row.label;
       const track = document.createElement("span");
       track.className = `relative block h-[6px] flex-1 overflow-hidden rounded-full ${row.bg}`;
@@ -2096,17 +2115,19 @@ function renderList() {
       gaugeWrap.className = "flex min-w-0 flex-1 justify-center";
       gaugeWrap.title = item.title || "";
 
-      const value = Math.max(0, Math.min(100, Number(item.value || 0)));
+      const rawValue = Number(item.value || 0);
+      const value = Math.max(0, Math.min(100, rawValue));
       const radius = 18;
       const circumference = Math.PI * radius;
       const fillLength = (value / 100) * circumference;
       const label = String(item.label || "");
+      const labelColor = String(item.labelColor || "#f8fbff");
 
       gaugeWrap.innerHTML = `
         <svg viewBox="0 0 52 34" class="h-9 w-full overflow-visible">
           <path d="M8 28 A18 18 0 0 1 44 28" fill="none" stroke="${item.trackColor}" stroke-width="5" stroke-linecap="butt"></path>
           <path d="M8 28 A18 18 0 0 1 44 28" fill="none" stroke="${item.fillColor}" stroke-width="5" stroke-linecap="butt" stroke-dasharray="${fillLength} ${circumference}"></path>
-          <text x="26" y="32.0" text-anchor="middle" dominant-baseline="ideographic" font-size="14" font-weight="500" fill="#f8fbff">${label}</text>
+          <text x="26" y="32.0" text-anchor="middle" dominant-baseline="ideographic" font-size="14" font-weight="500" fill="${labelColor}">${label}</text>
         </svg>
       `;
       wrap.appendChild(gaugeWrap);
@@ -2200,26 +2221,26 @@ function renderList() {
           value: fsSnapshot.relativePercent.read,
           fillColor: "#7fb6f6",
           trackColor: "#5f7ea3",
-          title: `read vs14 ${formatPercent(fsSnapshot.relativePercent.read, 1)}`
+          title: `read vs peak(excl today) ${formatPercent(fsSnapshot.relativePercent.read, 1)}`
         },
         {
           label: "W",
           value: fsSnapshot.relativePercent.write,
           fillColor: "#ffc36f",
           trackColor: "#8f7650",
-          title: `write vs14 ${formatPercent(fsSnapshot.relativePercent.write, 1)}`
+          title: `write vs peak(excl today) ${formatPercent(fsSnapshot.relativePercent.write, 1)}`
         },
         {
           label: "D",
           value: fsSnapshot.relativePercent.delete,
           fillColor: "#ff9bb9",
           trackColor: "#94677b",
-          title: `delete vs14 ${formatPercent(fsSnapshot.relativePercent.delete, 1)}`
+          title: `delete vs peak(excl today) ${formatPercent(fsSnapshot.relativePercent.delete, 1)}`
         }
       ]
     ),
     summaryHtml: state.usageSummary
-      ? `<strong>r${formatPercent(fsSnapshot.ratePercent.read, 1)}</strong> - w${formatPercent(fsSnapshot.ratePercent.write, 1)} - d${formatPercent(fsSnapshot.ratePercent.delete, 1)}`
+      ? `r${formatPercent(fsSnapshot.ratePercent.read, 1)} - w${formatPercent(fsSnapshot.ratePercent.write, 1)} - d${formatPercent(fsSnapshot.ratePercent.delete, 1)}`
       : "",
     summaryText: state.usageSummary ? "" : (state.usageError ? "error" : "loading..."),
     dblclickUrl: FIREBASE_USAGE_PAGE_URL,
@@ -2233,14 +2254,14 @@ function renderList() {
     graphEl: makeMiniProgressRows(
       [
         {
-          label: "S",
+          label: "Save",
           value: Number(storageSnapshot.percentOfNoCost.storage || 0),
           color: "bg-[#b8efe8]",
           bg: "bg-[#5f8b87]",
           title: `storage ${formatPercent(storageSnapshot.percentOfNoCost.storage, 1)}`
         },
         {
-          label: "T",
+          label: "Tran",
           value: Number(storageSnapshot.percentOfNoCost.download || 0),
           color: "bg-[#9fe0ff]",
           bg: "bg-[#5a88a0]",
@@ -3124,7 +3145,7 @@ async function summarizeMemoAtPointer(ev) {
 
   const reqId = ++summaryRequestSeq;
   showSummaryTooltip({
-    head: "summary (gpt-4.1-nano)",
+    head: `summary (${String(state.runtimeConfig?.memoSummaryModel || "gpt-4.1-nano")})`,
     body: "要約中...",
     isError: false,
     followPointer: true
@@ -3146,6 +3167,7 @@ async function summarizeMemoAtPointer(ev) {
       isError: false,
       followPointer: true
     });
+    renderSummaryButtonTooltip(res.model || "gpt-4.1-nano");
     setStatus("Summary ready");
   } catch (error) {
     if (reqId !== summaryRequestSeq) return;
@@ -3399,6 +3421,7 @@ fillEditor(null);
 setBodyMode("preview");
 updateBodyMode();
 renderAutoRefreshIndicator();
+renderSummaryButtonTooltip();
 
 async function initApp() {
   try {

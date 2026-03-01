@@ -1197,7 +1197,12 @@ function shouldUseAiUsageOverviewSummary() {
 
 function getUsageOverviewSummaryModel() {
   const value = String(process.env.USAGE_OVERVIEW_SUMMARY_MODEL || "").trim();
-  return value || "gpt-4.1-mini";
+  return value || "gpt-4o-mini";
+}
+
+function getMemoSummaryModel() {
+  const value = String(process.env.MEMO_SUMMARY_MODEL || "").trim();
+  return value || "gpt-4.1-nano";
 }
 
 // ★ 変更2: system prompt・user JSON・max_output_tokens を最適化
@@ -1347,6 +1352,7 @@ async function summarizeMemoWithOpenAI({ threadTitle, memoBody }) {
   const body = String(memoBody || "").trim();
   if (!body) throw new Error("memoBody is required.");
   const clipped = body.slice(0, 20000);
+  const model = getMemoSummaryModel();
 
   const input = [
     {
@@ -1380,7 +1386,7 @@ async function summarizeMemoWithOpenAI({ threadTitle, memoBody }) {
       Authorization: `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: "gpt-4.1-nano",
+      model,
       input,
       max_output_tokens: 220
     })
@@ -1395,7 +1401,7 @@ async function summarizeMemoWithOpenAI({ threadTitle, memoBody }) {
   if (!summary) {
     throw new Error("OpenAI response did not contain summary text.");
   }
-  return { summary, model: "gpt-4.1-nano" };
+  return { summary, model };
 }
 
 async function main() {
@@ -1432,7 +1438,9 @@ async function main() {
     res.json({
       ...runtimeConfig,
       adapterDetails: getAdapterRuntimeDetails(adapterRegistry),
-      usdToJpy: Number(process.env.USD_TO_JPY || 150)
+      usdToJpy: Number(process.env.USD_TO_JPY || 150),
+      memoSummaryModel: getMemoSummaryModel(),
+      usageOverviewSummaryModel: getUsageOverviewSummaryModel()
     });
   });
 

@@ -68,7 +68,7 @@
     <div class="mx-auto min-h-[calc(100vh-1rem)] max-w-[1320px] overflow-hidden rounded-2xl border border-[#ebe7e0] bg-[#fffefd]">
       <header class="flex items-center gap-1.5 overflow-x-auto border-b border-[#f1ece4] bg-[#fffefd] px-2.5 py-1.5 whitespace-nowrap">
         <div class="ml-1 mr-1 inline-flex shrink-0 items-center gap-1.5">
-          <button id="autoRefreshIndicator" tabindex="-1" type="button" class="h-3 w-3 rounded-full border border-transparent" title="Auto refresh"></button>
+          <button id="autoRefreshIndicator" tabindex="-1" type="button" class="h-2.5 w-2.5 rounded-full border border-transparent" title="Auto refresh"></button>
           <h1 id="appTitle" class="cursor-pointer select-none text-sm font-semibold text-[#5e6f8d]" title="Double-click to reload">codex-memo</h1>
           <button id="modeBadge" type="button" class="inline-flex h-5 items-center rounded-md border bg-transparent px-1 text-[10px] font-semibold leading-none" title="Mode">-</button>
         </div>
@@ -123,28 +123,27 @@
             </div>
             <div class="w-full md:w-[192px]">
               <label for="downloadFormatSelect" class="mb-1 block text-[11px] text-[#7a8398]">download</label>
-              <div class="flex items-center gap-2">
+              <div class="flex items-center gap-1">
                 <select id="downloadFormatSelect" tabindex="-1" aria-label="Download format" class="h-7 w-[62px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
                 <option value="txt">txt</option>
                 <option value="md">md</option>
                 <option value="json">json</option>
                 </select>
-                <button id="downloadBtn" tabindex="-1" type="button" aria-label="Download" title="Download" class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#d4d8e0] bg-[#fefdfb] p-0 hover:border-[#7f90b0]">
-                  <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4 fill-none stroke-[#6e7d99]" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <button id="downloadBtn" tabindex="-1" type="button" aria-label="Download" title="Download" class="ml-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#d4d8e0] bg-[#fefdfb] p-0 hover:border-[#7f90b0]">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" class="h-[18px] w-[18px] fill-none stroke-[#6e7d99]" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M12 5v9"></path>
                     <path d="m8.5 10.5 3.5 3.5 3.5-3.5"></path>
                     <path d="M5 18.5h14"></path>
                   </svg>
                 </button>
-                <button id="shareBtn" tabindex="-1" type="button" aria-label="Share" title="Share" class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#d4d8e0] bg-[#fefdfb] p-0 hover:border-[#7f90b0]">
+                <button id="shareBtn" tabindex="-1" type="button" aria-label="Share" title="Share" class="ml-4 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#d4d8e0] bg-[#fefdfb] p-0 hover:border-[#7f90b0]">
                   <svg viewBox="0 0 24 24" aria-hidden="true" class="h-5 w-5 fill-none stroke-[#6e7d99]" stroke-width="1.9">
                     <path d="M12 16V5"></path>
                     <path d="M8.5 8.5 12 5l3.5 3.5"></path>
                     <path d="M6 13.5v3a1.5 1.5 0 0 0 1.5 1.5h9a1.5 1.5 0 0 0 1.5-1.5v-3"></path>
                   </svg>
                 </button>
-                <span aria-hidden="true" class="inline-block w-12"></span>
-                <button id="summaryBtn" tabindex="-1" type="button" aria-label="AI summary" class="h-7 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">AI</button>
+                <button id="summaryBtn" tabindex="-1" type="button" aria-label="AI summary" class="ml-0.5 h-7 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs hover:border-[#7f90b0]">AI</button>
               </div>
             </div>
           </div>
