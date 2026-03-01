@@ -2460,7 +2460,7 @@ function renderList() {
     const updatingText = state.usageRefreshPending
       ? (state.usageRefreshReason === "summary" ? " / refreshing for AI..." : " / updating...")
       : "";
-    usageMeta.textContent = `${formatUsd(roughCost.totalUsd, 2)} / ${formatJpy(roughCost.totalJpy, 0)} / ${formatDate(latestFetchedAtISO)}${updatingText}`;
+    usageMeta.innerHTML = `<strong class="font-semibold text-[#6f7889]">${formatUsd(roughCost.totalUsd, 2)} / ${formatJpy(roughCost.totalJpy, 0)}</strong> / ${formatDate(latestFetchedAtISO)}${updatingText}`;
     usageMeta.title = `rough total cost ${formatUsd(roughCost.totalUsd, 2)} / ${formatJpy(roughCost.totalJpy, 0)} | latest fetch ${formatDate(latestFetchedAtISO)}${state.usageRefreshPending ? " | updating" : ""}`;
   }
   const collapseIcon = document.createElement("span");
