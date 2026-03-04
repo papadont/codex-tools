@@ -41,12 +41,12 @@ final class ShareViewController: SLComposeServiceViewController {
   override func viewDidLoad() {
     super.viewDidLoad()
     title = "codex-memo"
-    applyTheme()
   }
 
   override func viewDidAppear() {
     super.viewDidAppear()
     view.window?.title = "codex-memo"
+    applyTheme()
     makePostButtonDefaultIfPossible()
   }
 
@@ -122,19 +122,16 @@ final class ShareViewController: SLComposeServiceViewController {
     view.wantsLayer = true
     view.layer?.backgroundColor = canvasColor.cgColor
 
-    if let textView = findTextView(in: view) {
+    for textView in findEditableTextViews(in: view) {
       textView.drawsBackground = true
       textView.backgroundColor = cardColor
       textView.textColor = accentColor
       textView.insertionPointColor = accentColor
+      textView.focusRingType = .none
       if let scrollView = textView.enclosingScrollView {
-        scrollView.wantsLayer = true
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
-        scrollView.layer?.cornerRadius = 14
-        scrollView.layer?.backgroundColor = cardColor.cgColor
-        scrollView.layer?.borderWidth = 1
-        scrollView.layer?.borderColor = NSColor(srgbRed: 0.70, green: 0.73, blue: 0.76, alpha: 1).cgColor
+        scrollView.focusRingType = .none
       }
     }
   }
@@ -148,22 +145,32 @@ final class ShareViewController: SLComposeServiceViewController {
     postButton.bezelStyle = .rounded
     postButton.wantsLayer = true
     postButton.contentTintColor = .white
+    postButton.attributedTitle = NSAttributedString(
+      string: postButton.title,
+      attributes: [
+        .foregroundColor: NSColor.white,
+        .font: postButton.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+      ]
+    )
     postButton.layer?.backgroundColor = accentColor.cgColor
     postButton.layer?.cornerRadius = 10
     postButton.layer?.borderWidth = 0
+    postButton.needsDisplay = true
     view.window?.defaultButtonCell = postButton.cell as? NSButtonCell
   }
 
-  private func findTextView(in rootView: NSView) -> NSTextView? {
-    if let textView = rootView as? NSTextView {
-      return textView
+  private func findEditableTextViews(in rootView: NSView) -> [NSTextView] {
+    var result: [NSTextView] = []
+
+    if let textView = rootView as? NSTextView, textView.isEditable {
+      result.append(textView)
     }
+
     for subview in rootView.subviews {
-      if let textView = findTextView(in: subview) {
-        return textView
-      }
+      result.append(contentsOf: findEditableTextViews(in: subview))
     }
-    return nil
+
+    return result
   }
 
   private func findPostButton(in rootView: NSView) -> NSButton? {
