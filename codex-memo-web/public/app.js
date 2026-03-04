@@ -59,10 +59,15 @@ const STORAGE_USAGE_PAGE_URL = "https://console.firebase.google.com/project/hush
 const CODEX_USAGE_PAGE_URL = "https://chatgpt.com/codex/settings/usage";
 const OPENAI_USAGE_PAGE_URL = "https://platform.openai.com/usage";
 const OPENAI_COSTS_FETCH_TIMEOUT_MS = 20_000;
+const STATUS_BANNER_DEFAULT_MS = 3000;
+const STATUS_BANNER_ERROR_MS = 12000;
+const STATUS_BANNER_FORCE_MS = 3000;
+const STATUS_BANNER_DANGER_MS = 0;
 
 let usageRefreshInFlight = null;
 let usageOverviewSummaryInFlight = null;
 let attachmentLightbox = null;
+let statusBannerTimer = null;
 
 function usageSourceFooterLines() {
   return [
@@ -107,6 +112,9 @@ const el = {
   copyBodyBtn: document.getElementById("copyBodyBtn"),
   shareBtn: document.getElementById("shareBtn"),
   summaryBtn: document.getElementById("summaryBtn"),
+  statusBanner: document.getElementById("statusBanner"),
+  statusTitle: document.getElementById("statusTitle"),
+  statusIcon: document.getElementById("statusIcon"),
   status: document.getElementById("status")
 };
 
@@ -144,23 +152,78 @@ async function loadRuntimeConfig() {
 }
 
 function setStatus(message, isError = false, tone = "default") {
-  const selectedMemo = state.items.find((memo) => memo.id === state.selectedId);
-  el.status.textContent = message;
-  el.status.classList.remove("text-[#5d79a8]", "text-[#c96f8a]", "text-[#cf7896]");
+  if (!el.status || !el.statusBanner || !el.statusTitle || !el.statusIcon) return;
+  if (statusBannerTimer) {
+    clearTimeout(statusBannerTimer);
+    statusBannerTimer = null;
+  }
+
+  const text = String(message || "").trim();
+  if (!text) {
+    el.status.textContent = "";
+    el.statusTitle.textContent = "Message";
+    el.statusIcon.textContent = "i";
+    el.statusBanner.classList.remove("is-visible", "is-error", "is-danger", "is-force");
+    return;
+  }
+
+  el.status.textContent = text;
+  el.statusTitle.textContent = isError
+    ? "Warning"
+    : tone === "danger"
+      ? "Error"
+      : tone === "force"
+        ? "Notice"
+        : "Message";
+  el.statusIcon.textContent = isError
+    ? "!"
+    : tone === "danger"
+      ? "x"
+      : tone === "force"
+        ? "!"
+        : "i";
+  el.statusBanner.classList.remove("is-error", "is-danger", "is-force");
   if (isError) {
-    el.status.classList.add("text-[#c96f8a]");
-    return;
+    el.statusBanner.classList.add("is-error");
+  } else if (tone === "danger") {
+    el.statusBanner.classList.add("is-danger");
+  } else if (tone === "force") {
+    el.statusBanner.classList.add("is-force");
   }
-  if (tone !== "force" && selectedMemo && selectedMemo.deletable) {
-    el.status.textContent = `Deletable: ${selectedMemo.id}`;
-    el.status.classList.add("text-[#cf7896]");
-    return;
+  el.statusBanner.classList.add("is-visible");
+
+  const duration = isError
+    ? STATUS_BANNER_ERROR_MS
+    : tone === "danger"
+      ? STATUS_BANNER_DANGER_MS
+      : tone === "force"
+        ? STATUS_BANNER_FORCE_MS
+        : STATUS_BANNER_DEFAULT_MS;
+  if (duration > 0) {
+    statusBannerTimer = setTimeout(() => {
+      el.statusBanner.classList.remove("is-visible", "is-error", "is-danger", "is-force");
+      statusBannerTimer = null;
+    }, duration);
   }
-  if (tone === "danger") {
-    el.status.classList.add("text-[#cf7896]");
-    return;
+}
+
+function hideStatusBanner() {
+  if (statusBannerTimer) {
+    clearTimeout(statusBannerTimer);
+    statusBannerTimer = null;
   }
-  el.status.classList.add("text-[#5d79a8]");
+  if (el.status) {
+    el.status.textContent = "";
+  }
+  if (el.statusTitle) {
+    el.statusTitle.textContent = "Message";
+  }
+  if (el.statusIcon) {
+    el.statusIcon.textContent = "i";
+  }
+  if (el.statusBanner) {
+    el.statusBanner.classList.remove("is-visible", "is-error", "is-danger", "is-force");
+  }
 }
 
 function syncStickySlotDivider() {
@@ -3640,7 +3703,6 @@ async function summarizeMemoAtPointer(ev) {
         isError: false,
         followPointer: true
       });
-      await refreshUsageOverviewSummaryIfNeeded({ forceReload: true });
       if (reqId !== summaryRequestSeq) return;
       if (state.usageOverviewAiSummaryError) {
         showSummaryTooltip({
@@ -3730,6 +3792,9 @@ function initEvents() {
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") hideSummaryTooltip();
   });
+  if (el.statusBanner) {
+    el.statusBanner.addEventListener("click", hideStatusBanner);
+  }
 
   el.newBtn.addEventListener("click", () => {
     setBodyMode("text");
@@ -3964,9 +4029,6 @@ async function initApp() {
     renderStorageInfo(null);
     await loadMemos();
     await ensureQuickMemoExists();
-    refreshUsageStats({ forceReload: true }).catch((error) => {
-      setStatus(`Usage stats error: ${error.message || error}`, true);
-    });
   } catch (error) {
     setStatus(`Init error: ${error.message}`, true);
   }

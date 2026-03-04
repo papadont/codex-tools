@@ -318,14 +318,69 @@ textarea {
   width: 86px;
 }
 
-.status {
-  min-height: 18px;
-  color: #0f766e;
-  font-size: 12px;
+.status-banner {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  z-index: 120;
+  width: min(370px, calc(100vw - 34px));
+  min-height: 64px;
+  padding: 10px 16px 14px;
+  border: 1px solid rgba(168, 177, 194, 0.18);
+  border-bottom: 0;
+  border-right: 0;
+  border-radius: 20px 16px 0 0;
+  background: rgba(92, 92, 98, 0.84);
+  box-shadow: 0 12px 28px rgba(23, 28, 38, 0.22);
+  color: #f5f7fb;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  opacity: 0;
+  transform: translate3d(0, 12px, 0);
+  transition:
+    transform 180ms ease,
+    opacity 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease,
+    color 180ms ease;
+  pointer-events: none;
 }
 
-.status.error {
-  color: var(--danger);
+.status-banner.is-visible {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+.status-banner.is-error {
+  background: rgba(111, 91, 54, 0.9);
+  color: #fff1c8;
+}
+
+.status-banner.is-danger {
+  background: rgba(112, 73, 86, 0.9);
+  color: #ffe0e8;
+}
+
+.status-banner.is-force {
+  background: rgba(74, 88, 118, 0.9);
+  color: #edf4ff;
+}
+
+.status-banner__title {
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.status-banner__text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .hint {
@@ -348,6 +403,14 @@ textarea {
   .app-window {
     border-radius: 0;
     min-height: 100vh;
+  }
+
+  .status-banner {
+    bottom: 6px;
+    right: 8px;
+    width: min(320px, calc(100vw - 20px));
+    min-height: 58px;
+    padding: 9px 12px 12px;
   }
 
   .layout {
