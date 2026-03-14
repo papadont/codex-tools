@@ -7,8 +7,11 @@ const { GoogleAuth } = require("google-auth-library");
 const { loadEnvFromCandidates } = require("./load_env");
 
 const CODEX_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
+const OPENAI_COSTS_ENDPOINT = "https://api.openai.com/v1/organization/costs";
 const OUT_DIR = path.join(process.cwd(), "dist", "usage-reports", "weekly");
 const DEFAULT_FIRESTORE_HOURS = Number(process.env.WEEKLY_USAGE_HOURS || 24 * 14);
+const DEFAULT_STORAGE_WINDOW_HOURS = 24 * 30;
+const DEFAULT_OPENAI_WINDOW_DAYS = 30;
 
 const USAGE_METRIC_CANDIDATES = {
   read: [
@@ -30,6 +33,26 @@ const DAILY_FREE_TIER_LIMITS = {
   write: 20_000,
   delete: 20_000
 };
+
+const STORAGE_TOTAL_BYTES_CANDIDATES = [
+  "storage.googleapis.com/storage/v2/total_bytes",
+  "storage.googleapis.com/storage/total_bytes"
+];
+
+const STORAGE_OBJECT_COUNT_CANDIDATES = [
+  "storage.googleapis.com/storage/v2/total_count",
+  "storage.googleapis.com/storage/total_count"
+];
+
+const STORAGE_EGRESS_BYTES_CANDIDATES = [
+  "storage.googleapis.com/network/sent_bytes_count"
+];
+
+const STORAGE_REQUEST_COUNT_CANDIDATES = [
+  "storage.googleapis.com/api/request_count"
+];
+
+const DEFAULT_BUDGET_JPY = Number(process.env.USAGE_SOFT_BUDGET_JPY || 5000);
 
 loadEnvFromCandidates();
 
@@ -55,6 +78,11 @@ function toPointNumber(point) {
 function percentOf(value, total) {
   if (!Number.isFinite(total) || total <= 0) return 0;
   return (value / total) * 100;
+}
+
+function usdRound(value, digits = 4) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? Number(n.toFixed(digits)) : 0;
 }
 
 function buildDateList(startTime, endTime) {
@@ -118,6 +146,470 @@ async function fetchMonitoringDailyTotals({ projectId, metricType, startTime, en
   } while (pageToken);
 
   return { metricType, daily, points };
+}
+
+function buildBucketMonitoringFilter(metricType, bucketName) {
+  const safeBucket = String(bucketName || "").replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+  return `metric.type="${metricType}" AND resource.labels.bucket_name="${safeBucket}"`;
+}
+
+async function getMonitoringAccessContext() {
+  const auth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/monitoring.read"] });
+  const client = await auth.getClient();
+  const tokenResponse = await client.getAccessToken();
+  const accessToken = typeof tokenResponse === "string" ? tokenResponse : tokenResponse.token;
+  if (!accessToken) throw new Error("Failed to get Monitoring access token.");
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || await auth.getProjectId();
+  if (!projectId) throw new Error("Project ID could not be resolved for Monitoring.");
+  return { accessToken, projectId };
+}
+
+async function listMonitoringTimeSeries({
+  accessToken,
+  projectId,
+  filter,
+  startTime,
+  endTime,
+  aggregation = {},
+  pageToken = ""
+}) {
+  const qs = new URLSearchParams({
+    filter,
+    "interval.startTime": startTime,
+    "interval.endTime": endTime,
+    view: "FULL"
+  });
+  if (aggregation.alignmentPeriod) qs.set("aggregation.alignmentPeriod", aggregation.alignmentPeriod);
+  if (aggregation.perSeriesAligner) qs.set("aggregation.perSeriesAligner", aggregation.perSeriesAligner);
+  if (aggregation.crossSeriesReducer) qs.set("aggregation.crossSeriesReducer", aggregation.crossSeriesReducer);
+  if (Array.isArray(aggregation.groupByFields) && aggregation.groupByFields.length) {
+    for (const field of aggregation.groupByFields) qs.append("aggregation.groupByFields", field);
+  }
+  if (pageToken) qs.set("pageToken", pageToken);
+
+  const url = `https://monitoring.googleapis.com/v3/projects/${encodeURIComponent(projectId)}/timeSeries?${qs.toString()}`;
+  const res = await fetch(url, { method: "GET", headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) {
+    const body = await res.text();
+    const error = new Error(`Monitoring API error (${res.status}): ${body}`);
+    error.statusCode = res.status;
+    throw error;
+  }
+  return res.json();
+}
+
+function isMetricNotFoundError(error) {
+  return Number(error?.statusCode) === 404;
+}
+
+async function fetchMonitoringLatestGauge({
+  accessToken,
+  projectId,
+  metricCandidates,
+  bucketName
+}) {
+  const end = new Date();
+  const start = new Date(end.getTime() - (48 * 60 * 60 * 1000));
+  const startTime = start.toISOString();
+  const endTime = end.toISOString();
+
+  for (const metricType of metricCandidates) {
+    let pageToken = "";
+    let bestPoint = null;
+    try {
+      do {
+        const payload = await listMonitoringTimeSeries({
+          accessToken,
+          projectId,
+          filter: buildBucketMonitoringFilter(metricType, bucketName),
+          startTime,
+          endTime,
+          aggregation: {
+            alignmentPeriod: "3600s",
+            perSeriesAligner: "ALIGN_NEXT_OLDER",
+            crossSeriesReducer: "REDUCE_SUM"
+          },
+          pageToken
+        });
+        const series = Array.isArray(payload.timeSeries) ? payload.timeSeries : [];
+        for (const item of series) {
+          for (const point of Array.isArray(item.points) ? item.points : []) {
+            const pointTime = String(point?.interval?.endTime || point?.interval?.startTime || "");
+            if (!pointTime) continue;
+            if (!bestPoint || pointTime > bestPoint.time) {
+              bestPoint = { time: pointTime, value: toPointNumber(point) };
+            }
+          }
+        }
+        pageToken = payload.nextPageToken || "";
+      } while (pageToken);
+    } catch (error) {
+      if (isMetricNotFoundError(error)) continue;
+      throw error;
+    }
+
+    if (bestPoint) {
+      return { metricType, value: bestPoint.value, sampledAtISO: bestPoint.time };
+    }
+  }
+
+  return { metricType: metricCandidates[0], value: 0, sampledAtISO: endTime };
+}
+
+async function fetchMonitoringTotalOverWindow({
+  accessToken,
+  projectId,
+  metricCandidates,
+  bucketName,
+  hours
+}) {
+  const end = new Date();
+  const start = new Date(end.getTime() - (hours * 60 * 60 * 1000));
+  const startTime = start.toISOString();
+  const endTime = end.toISOString();
+
+  for (const metricType of metricCandidates) {
+    let total = 0;
+    let points = 0;
+    let pageToken = "";
+    try {
+      do {
+        const payload = await listMonitoringTimeSeries({
+          accessToken,
+          projectId,
+          filter: buildBucketMonitoringFilter(metricType, bucketName),
+          startTime,
+          endTime,
+          aggregation: {
+            alignmentPeriod: "86400s",
+            perSeriesAligner: "ALIGN_SUM",
+            crossSeriesReducer: "REDUCE_SUM"
+          },
+          pageToken
+        });
+        const series = Array.isArray(payload.timeSeries) ? payload.timeSeries : [];
+        for (const item of series) {
+          for (const point of Array.isArray(item.points) ? item.points : []) {
+            total += toPointNumber(point);
+            points += 1;
+          }
+        }
+        pageToken = payload.nextPageToken || "";
+      } while (pageToken);
+    } catch (error) {
+      if (isMetricNotFoundError(error)) continue;
+      throw error;
+    }
+    if (points > 0 || total > 0) return { metricType, total, startTime, endTime };
+  }
+
+  return { metricType: metricCandidates[0], total: 0, startTime, endTime };
+}
+
+function classifyStorageRequestMethod(method) {
+  const name = String(method || "").toLowerCase();
+  if (!name) return "other";
+  if (/(write|create|delete|compose|rewrite|insert|patch|update|list)/.test(name)) return "classA";
+  if (/(read|get|stat|metadata)/.test(name)) return "classB";
+  return "other";
+}
+
+async function fetchStorageRequestBreakdown({
+  accessToken,
+  projectId,
+  bucketName,
+  hours
+}) {
+  const end = new Date();
+  const start = new Date(end.getTime() - (hours * 60 * 60 * 1000));
+  const startTime = start.toISOString();
+  const endTime = end.toISOString();
+
+  for (const metricType of STORAGE_REQUEST_COUNT_CANDIDATES) {
+    let pageToken = "";
+    const totals = { classA: 0, classB: 0, other: 0, total: 0 };
+
+    try {
+      do {
+        const payload = await listMonitoringTimeSeries({
+          accessToken,
+          projectId,
+          filter: buildBucketMonitoringFilter(metricType, bucketName),
+          startTime,
+          endTime,
+          aggregation: {
+            alignmentPeriod: "86400s",
+            perSeriesAligner: "ALIGN_SUM",
+            crossSeriesReducer: "REDUCE_SUM",
+            groupByFields: ["metric.labels.method"]
+          },
+          pageToken
+        });
+        const series = Array.isArray(payload.timeSeries) ? payload.timeSeries : [];
+        for (const item of series) {
+          const kind = classifyStorageRequestMethod(item?.metric?.labels?.method || "");
+          for (const point of Array.isArray(item.points) ? item.points : []) {
+            const value = toPointNumber(point);
+            totals[kind] += value;
+            totals.total += value;
+          }
+        }
+        pageToken = payload.nextPageToken || "";
+      } while (pageToken);
+    } catch (error) {
+      if (isMetricNotFoundError(error)) continue;
+      throw error;
+    }
+
+    if (totals.total > 0) return { metricType, totals, startTime, endTime };
+  }
+
+  return {
+    metricType: STORAGE_REQUEST_COUNT_CANDIDATES[0],
+    totals: { classA: 0, classB: 0, other: 0, total: 0 },
+    startTime,
+    endTime
+  };
+}
+
+function normalizeBucketName(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  return value.replace(/^gs:\/\//, "").replace(/\/+$/, "");
+}
+
+function storageQuotaProfile(bucketName) {
+  if (/\.firebasestorage\.app$/i.test(bucketName)) {
+    return {
+      bucketKind: "firebasestorage.app",
+      noCost: {
+        storageGbMonths: 5,
+        downloadGbPerMonth: 100,
+        classAOpsPerMonth: 5_000,
+        classBOpsPerMonth: 50_000
+      },
+      pricingAssumption: {
+        storageUsdPerGbMonth: 0.02,
+        downloadUsdPerGb: 0.12,
+        classAUsdPer1k: 0.005,
+        classBUsdPer1k: 0.0004
+      },
+      note: "Firebase default bucket (firebasestorage.app) no-cost usage profile."
+    };
+  }
+  return {
+    bucketKind: /\.appspot\.com$/i.test(bucketName) ? "appspot.com" : "custom",
+    noCost: {
+      storageGbMonths: 5,
+      downloadGbPerDay: 1,
+      uploadOpsPerDay: 20_000,
+      downloadOpsPerDay: 50_000
+    },
+    pricingAssumption: {
+      storageUsdPerGbMonth: 0.02,
+      downloadUsdPerGb: 0.12,
+      classAUsdPer1k: 0.005,
+      classBUsdPer1k: 0.0004
+    },
+    note: "Legacy/default bucket profile. Download/request free quota is daily."
+  };
+}
+
+function buildStorageEstimate({ profile, currentTotalBytes, last30dEgressBytes, requestTotals }) {
+  const storageGb = Number(currentTotalBytes || 0) / (1024 ** 3);
+  const egressGb = Number(last30dEgressBytes || 0) / (1024 ** 3);
+  const classA = Number(requestTotals?.classA || 0);
+  const classB = Number(requestTotals?.classB || 0);
+  const free = profile.noCost || {};
+  const pricing = profile.pricingAssumption || {};
+  const billableStorageGb = Math.max(0, storageGb - Number(free.storageGbMonths || 0));
+  const billableEgressGb = Math.max(0, egressGb - Number(free.downloadGbPerMonth || 0));
+  const billableClassA = Math.max(0, classA - Number(free.classAOpsPerMonth || 0));
+  const billableClassB = Math.max(0, classB - Number(free.classBOpsPerMonth || 0));
+  const estimatedMonthlyUsd = usdRound(
+    (billableStorageGb * Number(pricing.storageUsdPerGbMonth || 0))
+      + (billableEgressGb * Number(pricing.downloadUsdPerGb || 0))
+      + ((billableClassA / 1000) * Number(pricing.classAUsdPer1k || 0))
+      + ((billableClassB / 1000) * Number(pricing.classBUsdPer1k || 0))
+  );
+
+  return {
+    storageGb,
+    egressGb,
+    billableStorageGb,
+    billableEgressGb,
+    billableClassA,
+    billableClassB,
+    estimatedMonthlyUsd,
+    percentOfNoCost: {
+      storage: percentOf(storageGb, Number(free.storageGbMonths || 0)),
+      download: percentOf(egressGb, Number(free.downloadGbPerMonth || 0)),
+      classA: percentOf(classA, Number(free.classAOpsPerMonth || 0)),
+      classB: percentOf(classB, Number(free.classBOpsPerMonth || 0))
+    }
+  };
+}
+
+async function getStorageUsagePayload() {
+  requireCredentials();
+  const bucketName = normalizeBucketName(process.env.CODEX_MEMO_FIREBASE_BUCKET);
+  if (!bucketName) throw new Error("CODEX_MEMO_FIREBASE_BUCKET is not set.");
+
+  const profile = storageQuotaProfile(bucketName);
+  const { accessToken, projectId } = await getMonitoringAccessContext();
+  const [currentBytes, objectCount, egress30d, requests30d] = await Promise.all([
+    fetchMonitoringLatestGauge({ accessToken, projectId, metricCandidates: STORAGE_TOTAL_BYTES_CANDIDATES, bucketName }),
+    fetchMonitoringLatestGauge({ accessToken, projectId, metricCandidates: STORAGE_OBJECT_COUNT_CANDIDATES, bucketName }),
+    fetchMonitoringTotalOverWindow({
+      accessToken,
+      projectId,
+      metricCandidates: STORAGE_EGRESS_BYTES_CANDIDATES,
+      bucketName,
+      hours: DEFAULT_STORAGE_WINDOW_HOURS
+    }),
+    fetchStorageRequestBreakdown({ accessToken, projectId, bucketName, hours: DEFAULT_STORAGE_WINDOW_HOURS })
+  ]);
+
+  const estimate = buildStorageEstimate({
+    profile,
+    currentTotalBytes: currentBytes.value,
+    last30dEgressBytes: egress30d.total,
+    requestTotals: requests30d.totals
+  });
+
+  return {
+    fetchedAtISO: new Date().toISOString(),
+    projectId,
+    bucketName,
+    bucketKind: profile.bucketKind,
+    noCost: profile.noCost,
+    note: profile.note,
+    pricingAssumption: {
+      ...profile.pricingAssumption,
+      currency: "USD",
+      inferred: true
+    },
+    current: {
+      totalBytes: Number(currentBytes.value || 0),
+      totalObjects: Number(objectCount.value || 0),
+      sampledAtISO: currentBytes.sampledAtISO || objectCount.sampledAtISO || new Date().toISOString(),
+      metricTypes: {
+        totalBytes: currentBytes.metricType,
+        totalObjects: objectCount.metricType
+      }
+    },
+    last30d: {
+      startTime: egress30d.startTime,
+      endTime: egress30d.endTime,
+      egressBytes: Number(egress30d.total || 0),
+      requestCounts: requests30d.totals,
+      metricTypes: {
+        egressBytes: egress30d.metricType,
+        requestCount: requests30d.metricType
+      }
+    },
+    estimate
+  };
+}
+
+function parseOpenAICostBuckets(payload) {
+  const buckets = Array.isArray(payload?.data) ? payload.data : [];
+  const daily = [];
+  let totalUsd = 0;
+  for (const bucket of buckets) {
+    const rows = Array.isArray(bucket?.results) ? bucket.results : [];
+    let amount = 0;
+    let currency = "usd";
+    const lineItemTotals = new Map();
+    for (const row of rows) {
+      const value = Number(row?.amount?.value || 0);
+      if (Number.isFinite(value)) amount += value;
+      if (row?.amount?.currency) currency = String(row.amount.currency).toLowerCase();
+      const lineItem = String(row?.line_item || "other").trim() || "other";
+      lineItemTotals.set(lineItem, usdRound(Number(lineItemTotals.get(lineItem) || 0) + (Number.isFinite(value) ? value : 0), 6));
+    }
+    totalUsd += amount;
+    const lineItems = Array.from(lineItemTotals.entries())
+      .map(([name, amountUsd]) => ({ name, amountUsd: usdRound(amountUsd, 6), currency }))
+      .filter((item) => item.amountUsd > 0)
+      .sort((a, b) => b.amountUsd - a.amountUsd || a.name.localeCompare(b.name));
+    daily.push({
+      startTime: Number(bucket?.start_time || 0),
+      endTime: Number(bucket?.end_time || 0),
+      amountUsd: usdRound(amount, 6),
+      currency,
+      lineItems
+    });
+  }
+  daily.sort((a, b) => a.startTime - b.startTime);
+  return { totalUsd: usdRound(totalUsd, 6), daily };
+}
+
+async function getOpenAICostsPayload() {
+  const adminKey = String(process.env.OPENAI_ADMIN_KEY || "").trim();
+  if (!adminKey) {
+    return {
+      fetchedAtISO: new Date().toISOString(),
+      available: false,
+      reason: "OPENAI_ADMIN_KEY is not set."
+    };
+  }
+
+  const endTime = Math.floor(Date.now() / 1000);
+  const startTime = endTime - (DEFAULT_OPENAI_WINDOW_DAYS * 24 * 60 * 60);
+  const qs = new URLSearchParams({
+    start_time: String(startTime),
+    end_time: String(endTime),
+    bucket_width: "1d",
+    limit: String(DEFAULT_OPENAI_WINDOW_DAYS + 1)
+  });
+  qs.append("group_by", "line_item");
+  const res = await fetch(`${OPENAI_COSTS_ENDPOINT}?${qs.toString()}`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${adminKey}` }
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = payload?.error?.message || `OpenAI costs API error (${res.status})`;
+    throw new Error(message);
+  }
+
+  const parsed = parseOpenAICostBuckets(payload);
+  const latestDay = parsed.daily[parsed.daily.length - 1] || null;
+  const last14Daily = parsed.daily.slice(-14);
+  const lineItems14dMap = new Map();
+  let totalUsd14d = 0;
+  for (const day of last14Daily) {
+    totalUsd14d += Number(day?.amountUsd || 0);
+    for (const item of Array.isArray(day?.lineItems) ? day.lineItems : []) {
+      const name = String(item?.name || "other").trim() || "other";
+      const amountUsd = Number(item?.amountUsd || 0);
+      if (!Number.isFinite(amountUsd) || amountUsd <= 0) continue;
+      lineItems14dMap.set(name, usdRound(Number(lineItems14dMap.get(name) || 0) + amountUsd, 6));
+    }
+  }
+
+  const lineItems14d = Array.from(lineItems14dMap.entries())
+    .map(([name, amountUsd]) => ({ name, amountUsd: usdRound(amountUsd, 6), currency: "usd" }))
+    .filter((item) => item.amountUsd > 0)
+    .sort((a, b) => b.amountUsd - a.amountUsd || a.name.localeCompare(b.name));
+
+  return {
+    fetchedAtISO: new Date().toISOString(),
+    available: true,
+    windowDays: DEFAULT_OPENAI_WINDOW_DAYS,
+    windowDaysRecent: 14,
+    startTime,
+    endTime,
+    totalUsd30d: parsed.totalUsd,
+    totalUsd14d: usdRound(totalUsd14d, 6),
+    latestDayUsd: latestDay ? latestDay.amountUsd : 0,
+    lineItems14d,
+    daily: parsed.daily,
+    budgetReference: {
+      amountJpy: DEFAULT_BUDGET_JPY
+    }
+  };
 }
 
 async function fetchBestUsageMetric({ projectId, startTime, endTime, candidates }) {
@@ -280,16 +772,20 @@ async function main() {
     ? DEFAULT_FIRESTORE_HOURS
     : 24 * 14;
 
-  const [firestoreUsage, codexUsage] = await Promise.all([
+  const [firestoreUsage, codexUsage, storageUsage, openaiCosts] = await Promise.all([
     getFirestoreUsagePayload({ hours: firestoreHours }),
-    getCodexUsagePayload()
+    getCodexUsagePayload(),
+    getStorageUsagePayload(),
+    getOpenAICostsPayload()
   ]);
 
   const payload = {
     snapshotAtISO: snapshotAt,
     source: "codex-memo usage tile compatible",
     firestoreUsage,
-    codexUsage
+    codexUsage,
+    storageUsage,
+    openaiCosts
   };
 
   fs.mkdirSync(OUT_DIR, { recursive: true });
