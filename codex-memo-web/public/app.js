@@ -40,6 +40,7 @@ const state = {
   usageOverviewAiSummaryKey: "",
   usageRefreshPending: false,
   usageRefreshReason: "",
+  persistedUsageOverview: null,
   editorAttachments: [],
   pointerClientX: 0,
   pointerClientY: 0
@@ -51,6 +52,9 @@ const USAGE_PANEL_ID = "__firestore_usage__";
 const QUICK_MEMO_TITLE = "Quick Memo";
 const QUICK_MEMO_PROJECT_NAME = "codex-memo";
 const QUICK_MEMO_MEMO_TYPE = "keep";
+const QUICK_MEMO_DOC_ID = "fixed-quick-memo";
+const USAGE_OVERVIEW_DOC_ID = "fixed-usage-overview";
+const USAGE_OVERVIEW_SNAPSHOT_MARKER = "codex-memo:usage-overview-snapshot";
 const QUICK_MEMO_LEGACY_PROJECT_NAMES = new Set(["common", QUICK_MEMO_PROJECT_NAME]);
 const USAGE_PANEL_HOURS = 24 * 14;
 const USAGE_FETCH_TIMEOUT_MS = 8000;
@@ -453,6 +457,11 @@ function currentEditableStorageOptions() {
   return currentAllowedAdapters().filter((kind) => kind === "icloud" || kind === "firebase");
 }
 
+function isHiddenSystemMemo(item) {
+  const id = String(item?.id || "");
+  return id === QUICK_MEMO_DOC_ID || id === USAGE_OVERVIEW_DOC_ID;
+}
+
 function currentStorageFilterKind() {
   if (el.storageFilterSelect) {
     return normalizeStorageKind(el.storageFilterSelect.value, "");
@@ -544,9 +553,39 @@ function normalizeQuickMemoItem(item) {
   };
 }
 
+function quickMemoUpdatedAtMs(item) {
+  const value = item?.updatedAtISO || item?.createdAtISO || item?.datetimeISO || "";
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function quickMemoHasContent(item) {
+  const body = String(item?.memoBody || "").trim();
+  const attachments = Array.isArray(item?.attachments) ? item.attachments : [];
+  return Boolean(body || attachments.length);
+}
+
+function bestLegacyQuickMemoItem(items = state.items) {
+  return items
+    .filter((item) => matchesQuickMemoSignature(item) && item.id !== QUICK_MEMO_DOC_ID)
+    .sort((a, b) => {
+      const contentDiff = Number(quickMemoHasContent(b)) - Number(quickMemoHasContent(a));
+      if (contentDiff !== 0) return contentDiff;
+      return quickMemoUpdatedAtMs(b) - quickMemoUpdatedAtMs(a);
+    })[0] || null;
+}
+
+function canonicalQuickMemoItem(items = state.items) {
+  const fixed = items.find((item) => item.id === QUICK_MEMO_DOC_ID) || null;
+  const legacy = bestLegacyQuickMemoItem(items);
+  if (fixed && quickMemoHasContent(fixed)) return fixed;
+  if (legacy && quickMemoHasContent(legacy)) return legacy;
+  return fixed || legacy || null;
+}
+
 function updateQuickMemoStateFromItems() {
-  const found = state.items.find((item) => matchesQuickMemoSignature(item));
-  state.quickMemoId = found?.id || null;
+  const found = canonicalQuickMemoItem(state.items);
+  state.quickMemoId = found?.id || QUICK_MEMO_DOC_ID;
   return found ? normalizeQuickMemoItem(found) : null;
 }
 
@@ -1032,7 +1071,7 @@ async function refreshUsageOverviewSummaryIfNeeded(options = {}) {
       state.usageOverviewAiSummaryKey = key;
     } finally {
       if (state.selectedId === USAGE_OVERVIEW_PANEL_ID) {
-        fillEditor(buildUsageOverviewPanelItem(), { fromCache: false });
+        fillEditor(buildUsageOverviewPanelItem({ forceRebuild: true }), { fromCache: false });
       }
     }
   })().finally(() => {
@@ -1224,6 +1263,86 @@ function getMonthPaceInfo(baseDate = new Date()) {
   };
 }
 
+function buildUsageOverviewSnapshot() {
+  return {
+    version: 1,
+    usageSummary: state.usageSummary,
+    usageError: state.usageError,
+    usageFetchedAtISO: state.usageFetchedAtISO,
+    storageUsageSummary: state.storageUsageSummary,
+    storageUsageError: state.storageUsageError,
+    storageUsageFetchedAtISO: state.storageUsageFetchedAtISO,
+    openaiCostsSummary: state.openaiCostsSummary,
+    openaiCostsError: state.openaiCostsError,
+    openaiCostsFetchedAtISO: state.openaiCostsFetchedAtISO,
+    codexUsageSummary: state.codexUsageSummary,
+    codexUsageError: state.codexUsageError,
+    codexUsageFetchedAtISO: state.codexUsageFetchedAtISO,
+    usageOverviewAiSummary: state.usageOverviewAiSummary,
+    usageOverviewAiSummaryModel: state.usageOverviewAiSummaryModel,
+    usageOverviewAiSummaryError: state.usageOverviewAiSummaryError,
+    usageOverviewAiSummaryKey: state.usageOverviewAiSummaryKey
+  };
+}
+
+function serializeUsageOverviewMemoBody(visibleBody, snapshot = buildUsageOverviewSnapshot()) {
+  const body = String(visibleBody || "").trim();
+  if (!snapshot) return body;
+  return [
+    body,
+    "",
+    `<!-- ${USAGE_OVERVIEW_SNAPSHOT_MARKER}`,
+    JSON.stringify(snapshot, null, 2),
+    "-->"
+  ].join("\n");
+}
+
+function parseUsageOverviewMemoBody(rawMemoBody) {
+  const raw = String(rawMemoBody || "");
+  const matcher = new RegExp(`\\n?<!--\\s*${USAGE_OVERVIEW_SNAPSHOT_MARKER}\\s*\\n([\\s\\S]*?)\\n-->\\s*$`);
+  const match = raw.match(matcher);
+  if (!match) {
+    return {
+      visibleBody: raw,
+      snapshot: null
+    };
+  }
+
+  let snapshot = null;
+  try {
+    snapshot = JSON.parse(match[1]);
+  } catch (error) {
+    console.warn("[codex-memo] usage overview snapshot parse failed:", error);
+  }
+
+  return {
+    visibleBody: raw.replace(matcher, "").trimEnd(),
+    snapshot
+  };
+}
+
+function restoreUsageOverviewSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return false;
+  state.usageSummary = snapshot.usageSummary || null;
+  state.usageError = String(snapshot.usageError || "");
+  state.usageFetchedAtISO = String(snapshot.usageFetchedAtISO || "");
+  state.storageUsageSummary = snapshot.storageUsageSummary || null;
+  state.storageUsageError = String(snapshot.storageUsageError || "");
+  state.storageUsageFetchedAtISO = String(snapshot.storageUsageFetchedAtISO || "");
+  state.openaiCostsSummary = snapshot.openaiCostsSummary || null;
+  state.openaiCostsError = String(snapshot.openaiCostsError || "");
+  state.openaiCostsFetchedAtISO = String(snapshot.openaiCostsFetchedAtISO || "");
+  state.codexUsageSummary = snapshot.codexUsageSummary || null;
+  state.codexUsageError = String(snapshot.codexUsageError || "");
+  state.codexUsageFetchedAtISO = String(snapshot.codexUsageFetchedAtISO || "");
+  state.usageOverviewAiSummary = String(snapshot.usageOverviewAiSummary || "");
+  state.usageOverviewAiSummaryModel = String(snapshot.usageOverviewAiSummaryModel || "");
+  state.usageOverviewAiSummaryError = String(snapshot.usageOverviewAiSummaryError || "");
+  state.usageOverviewAiSummaryKey = String(snapshot.usageOverviewAiSummaryKey || "");
+  renderSummaryButtonTooltip(state.usageOverviewAiSummaryModel);
+  return true;
+}
+
 function buildUsageOverviewBody() {
   const fs = getFirestoreTodaySnapshot();
   const storage = getStorageSnapshot();
@@ -1330,7 +1449,20 @@ function buildUsageOverviewBody() {
   return lines.join("\n");
 }
 
-function buildUsageOverviewPanelItem() {
+function buildUsageOverviewPanelItem(options = {}) {
+  const persisted = state.persistedUsageOverview;
+  if (!Boolean(options.forceRebuild) && persisted?.memoBody) {
+    const parsed = parseUsageOverviewMemoBody(persisted.memoBody);
+    return {
+      id: USAGE_OVERVIEW_PANEL_ID,
+      projectName: "system",
+      memoType: "keep",
+      threadTitle: "Usage overview",
+      memoBody: parsed.visibleBody,
+      createdAtISO: persisted.createdAtISO || "",
+      updatedAtISO: persisted.updatedAtISO || ""
+    };
+  }
   return {
     id: USAGE_OVERVIEW_PANEL_ID,
     projectName: "system",
@@ -1397,7 +1529,7 @@ function buildUsageBody(summary) {
   return lines.join("\n");
 }
 
-function buildUsagePanelItem() {
+function buildUsagePanelItem(options = {}) {
   return {
     id: USAGE_PANEL_ID,
     projectName: "system",
@@ -1450,7 +1582,7 @@ function buildCodexUsageBody(summary) {
   ].join("\n");
 }
 
-function buildCodexUsagePanelItem() {
+function buildCodexUsagePanelItem(options = {}) {
   return {
     id: CODEX_USAGE_PANEL_ID,
     projectName: "system",
@@ -1520,6 +1652,29 @@ function isSameSnapshot(a, b) {
     a.storageKind === b.storageKind &&
     a.attachments === b.attachments
   );
+}
+
+function hasUnsavedEditorChanges() {
+  if (isReadOnlyPanelSelected()) return false;
+  if (!state.editorBaseline) return false;
+  return !isSameSnapshot(currentEditorSnapshot(), state.editorBaseline);
+}
+
+function confirmDiscardEditorChanges() {
+  if (!hasUnsavedEditorChanges()) return true;
+  return window.confirm("未保存の変更を破棄して移動する？");
+}
+
+async function upsertFixedMemo(id, payload) {
+  const data = await request(`/api/memos/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...payload,
+      createIfMissing: true
+    })
+  });
+  return data.item;
 }
 
 function updateSaveButtonState() {
@@ -2104,7 +2259,7 @@ function sortMemosForList(items) {
 }
 
 function listItemsForView() {
-  let items = state.items.filter((item) => !isQuickMemoItem(item));
+  let items = state.items.filter((item) => !isQuickMemoItem(item) && !isHiddenSystemMemo(item));
   const storageFilterKind = currentStorageFilterKind();
   if (storageFilterKind) {
     items = items.filter((item) => normalizeStorageKind(item.storageKind) === storageFilterKind);
@@ -2117,6 +2272,12 @@ function listItemsForView() {
 
 function getVisibleItemsSorted() {
   return sortMemosForList(listItemsForView());
+}
+
+async function openUsageOverview() {
+  if (!confirmDiscardEditorChanges()) return;
+  await loadPersistedUsageOverview();
+  fillEditor(buildUsageOverviewPanelItem(), { fromCache: false });
 }
 
 function refreshUsageStats(options = {}) {
@@ -2137,21 +2298,24 @@ function refreshUsageStats(options = {}) {
     loadStorageUsageSummary({ forceReload }),
     loadOpenAICostsSummary({ forceReload })
   ])
-    .then(() => refreshUsageOverviewSummaryIfNeeded({ forceReload }))
+    .then(async () => {
+      await refreshUsageOverviewSummaryIfNeeded({ forceReload });
+      await saveUsageOverviewSnapshot();
+    })
     .finally(() => {
       usageRefreshInFlight = null;
       state.usageRefreshPending = false;
       state.usageRefreshReason = "";
       if (state.selectedId === USAGE_OVERVIEW_PANEL_ID) {
-        fillEditor(buildUsageOverviewPanelItem(), { fromCache: false });
+        fillEditor(buildUsageOverviewPanelItem({ forceRebuild: true }), { fromCache: false });
         return;
       }
       if (state.selectedId === USAGE_PANEL_ID) {
-        fillEditor(buildUsagePanelItem(), { fromCache: false });
+        fillEditor(buildUsagePanelItem({ forceRebuild: true }), { fromCache: false });
         return;
       }
       if (state.selectedId === CODEX_USAGE_PANEL_ID) {
-        fillEditor(buildCodexUsagePanelItem(), { fromCache: false });
+        fillEditor(buildCodexUsagePanelItem({ forceRebuild: true }), { fromCache: false });
         return;
       }
       renderList();
@@ -2174,18 +2338,56 @@ function syncQuickMemoEditorState() {
   el.saveBtn.title = active ? "Save Quick Memo (Shift: save as new memo)" : "Save";
 }
 
+async function loadPersistedUsageOverview() {
+  try {
+    const data = await request(`/api/memos/${encodeURIComponent(USAGE_OVERVIEW_DOC_ID)}`);
+    state.persistedUsageOverview = data.item || null;
+    const parsed = parseUsageOverviewMemoBody(state.persistedUsageOverview?.memoBody || "");
+    restoreUsageOverviewSnapshot(parsed.snapshot);
+  } catch (error) {
+    if (String(error.message || "").includes("HTTP 404")) {
+      state.persistedUsageOverview = null;
+      return null;
+    }
+    console.warn("[codex-memo] persisted usage overview load failed:", error);
+    state.persistedUsageOverview = null;
+    return null;
+  }
+  return state.persistedUsageOverview;
+}
+
+async function saveUsageOverviewSnapshot() {
+  const item = await upsertFixedMemo(USAGE_OVERVIEW_DOC_ID, {
+    projectName: "system",
+    memoType: "keep",
+    threadTitle: "Usage overview",
+    memoBody: serializeUsageOverviewMemoBody(buildUsageOverviewBody()),
+    deletable: false,
+    pinned: false,
+    storageKind: currentDefaultStorageKind(),
+    attachments: []
+  });
+  state.persistedUsageOverview = item;
+  state.items = [...state.items.filter((memo) => memo.id !== USAGE_OVERVIEW_DOC_ID), item];
+  return item;
+}
+
 async function ensureQuickMemoExists() {
   const existing = getQuickMemoItem();
   if (existing) return existing;
   if (state.quickMemoEnsuring) return null;
   state.quickMemoEnsuring = true;
   try {
-    const data = await request("/api/memos", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildQuickMemoSeed(currentDefaultStorageKind()))
-    });
-    const item = normalizeQuickMemoItem(data.item);
+    const legacy = bestLegacyQuickMemoItem(state.items);
+    const payload = legacy && quickMemoHasContent(legacy)
+      ? {
+        ...buildQuickMemoSeed(normalizeStorageKind(legacy.storageKind, currentDefaultStorageKind())),
+        memoBody: String(legacy.memoBody || ""),
+        attachments: Array.isArray(legacy.attachments) ? legacy.attachments : [],
+        storageKind: normalizeStorageKind(legacy.storageKind, currentDefaultStorageKind())
+      }
+      : buildQuickMemoSeed(currentDefaultStorageKind());
+    const item = normalizeQuickMemoItem(await upsertFixedMemo(QUICK_MEMO_DOC_ID, payload));
     state.items = [...state.items.filter((memo) => !isQuickMemoItem(memo)), item];
     state.quickMemoId = item.id;
     renderList();
@@ -2196,6 +2398,37 @@ async function ensureQuickMemoExists() {
   } finally {
     state.quickMemoEnsuring = false;
   }
+}
+
+async function repairQuickMemoIfNeeded() {
+  const fixed = state.items.find((item) => item.id === QUICK_MEMO_DOC_ID) || null;
+  const legacy = bestLegacyQuickMemoItem(state.items);
+  if (!legacy || !quickMemoHasContent(legacy)) return false;
+  if (fixed && quickMemoHasContent(fixed)) return false;
+
+  const data = await request(`/api/memos/${encodeURIComponent(QUICK_MEMO_DOC_ID)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...buildQuickMemoSeed(normalizeStorageKind(legacy.storageKind, currentDefaultStorageKind())),
+      memoBody: String(legacy.memoBody || ""),
+      attachments: Array.isArray(legacy.attachments) ? legacy.attachments : [],
+      storageKind: normalizeStorageKind(legacy.storageKind, currentDefaultStorageKind()),
+      createIfMissing: true
+    })
+  });
+  const item = normalizeQuickMemoItem(data.item);
+  state.items = [...state.items.filter((memo) => memo.id !== QUICK_MEMO_DOC_ID), item];
+  state.quickMemoId = item.id;
+  return true;
+}
+
+async function openQuickMemo() {
+  if (!confirmDiscardEditorChanges()) return;
+  const quickMemo = await ensureQuickMemoExists();
+  if (!quickMemo?.id) return;
+  const data = await request(`/api/memos/${encodeURIComponent(quickMemo.id)}`);
+  fillEditor(normalizeQuickMemoItem(data.item), { fromCache: state.lastResponseCacheHit, editorStorageKind: data.item?.storageKind });
 }
 
 async function saveQuickMemo({ saveAsNew = false } = {}) {
@@ -2230,7 +2463,10 @@ async function saveQuickMemo({ saveAsNew = false } = {}) {
     const data = await request(`/api/memos/${encodeURIComponent(quickMemo.id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(quickMemoSavePayload())
+      body: JSON.stringify({
+        ...quickMemoSavePayload(),
+        createIfMissing: true
+      })
     });
     fillEditor(normalizeQuickMemoItem(data.item), { fromCache: false, editorStorageKind: data.item?.storageKind });
     setStatus(`Updated: ${data.item.id}`);
@@ -2254,7 +2490,8 @@ async function clearQuickMemo() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(quickMemoSavePayload({
         memoBody: "",
-        attachments: []
+        attachments: [],
+        createIfMissing: true
       }))
     });
     fillEditor(normalizeQuickMemoItem(data.item), { fromCache: false, editorStorageKind: data.item?.storageKind });
@@ -2316,16 +2553,8 @@ async function loadUsageSummary(options = {}) {
     state.usageSummary = body;
     state.usageError = "";
     state.usageFetchedAtISO = new Date().toISOString();
-    state.usageOverviewAiSummary = "";
-    state.usageOverviewAiSummaryModel = "";
-    state.usageOverviewAiSummaryError = "";
   } catch (error) {
-    state.usageSummary = null;
     state.usageError = error.message || "Failed to load usage";
-    state.usageFetchedAtISO = "";
-    state.usageOverviewAiSummary = "";
-    state.usageOverviewAiSummaryModel = "";
-    state.usageOverviewAiSummaryError = "";
   }
 }
 
@@ -2355,16 +2584,8 @@ async function loadCodexUsageSummary(options = {}) {
     state.codexUsageSummary = body;
     state.codexUsageError = "";
     state.codexUsageFetchedAtISO = new Date().toISOString();
-    state.usageOverviewAiSummary = "";
-    state.usageOverviewAiSummaryModel = "";
-    state.usageOverviewAiSummaryError = "";
   } catch (error) {
-    state.codexUsageSummary = null;
     state.codexUsageError = error.message || "Failed to load codex usage";
-    state.codexUsageFetchedAtISO = "";
-    state.usageOverviewAiSummary = "";
-    state.usageOverviewAiSummaryModel = "";
-    state.usageOverviewAiSummaryError = "";
   }
 }
 
@@ -2395,9 +2616,7 @@ async function loadStorageUsageSummary(options = {}) {
     state.storageUsageError = "";
     state.storageUsageFetchedAtISO = new Date().toISOString();
   } catch (error) {
-    state.storageUsageSummary = null;
     state.storageUsageError = error.message || "Failed to load storage usage";
-    state.storageUsageFetchedAtISO = "";
   }
 }
 
@@ -2428,9 +2647,7 @@ async function loadOpenAICostsSummary(options = {}) {
     state.openaiCostsError = "";
     state.openaiCostsFetchedAtISO = new Date().toISOString();
   } catch (error) {
-    state.openaiCostsSummary = null;
     state.openaiCostsError = error.message || "Failed to load OpenAI costs";
-    state.openaiCostsFetchedAtISO = "";
   }
 }
 
@@ -2439,7 +2656,7 @@ function renderList() {
   if (el.usagePanelSlot) {
     el.usagePanelSlot.innerHTML = "";
   }
-  const quickMemoItem = updateQuickMemoStateFromItems();
+  const quickMemoItem = getQuickMemoItem();
   const items = sortMemosForList(listItemsForView());
 
   const usageLi = document.createElement("li");
@@ -2831,7 +3048,11 @@ function renderList() {
     usageLi.appendChild(row);
   }
   usageLi.title = `Firestore: ${formatDate(state.usageFetchedAtISO || state.usageSummary?.endTime)} | Storage: ${formatDate(state.storageUsageFetchedAtISO || state.storageUsageSummary?.fetchedAtISO)} | OpenAI: ${formatDate(state.openaiCostsFetchedAtISO || state.openaiCostsSummary?.fetchedAtISO)} | Codex: ${formatDate(state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO)}`;
-  usageLi.addEventListener("click", () => fillEditor(buildUsageOverviewPanelItem(), { fromCache: false }));
+  usageLi.addEventListener("click", () => {
+    openUsageOverview().catch((error) => {
+      setStatus(`Usage overview open error: ${error.message || error}`, true);
+    });
+  });
   if (el.usagePanelSlot) {
     el.usagePanelSlot.appendChild(usageLi);
   } else {
@@ -2907,7 +3128,9 @@ function renderList() {
     card.appendChild(meta);
     quickLi.appendChild(card);
     quickLi.addEventListener("click", () => {
-      fillEditor(quickMemoItem, { fromCache: false, editorStorageKind: quickMemoItem.storageKind });
+      openQuickMemo().catch((error) => {
+        setStatus(`Quick Memo open error: ${error.message || error}`, true);
+      });
     });
     if (el.usagePanelSlot) {
       el.usagePanelSlot.appendChild(quickLi);
@@ -3269,6 +3492,12 @@ async function loadMemos(options = {}) {
     const data = await request(`/api/memos?${params.toString()}`);
     state.items = data.items || [];
     updateQuickMemoStateFromItems();
+    try {
+      await repairQuickMemoIfNeeded();
+    } catch (error) {
+      setStatus(`Quick Memo repair error: ${error.message || error}`, true);
+    }
+    updateQuickMemoStateFromItems();
     if (!state.quickMemoId && !state.quickMemoEnsuring) {
       ensureQuickMemoExists().catch((error) => {
         setStatus(`Quick Memo create error: ${error.message || error}`, true);
@@ -3322,6 +3551,7 @@ async function loadMemos(options = {}) {
 
 async function loadMemo(id) {
   try {
+    if (!confirmDiscardEditorChanges()) return;
     const data = await request(`/api/memos/${encodeURIComponent(id)}`);
     fillEditor(isQuickMemoItem(data.item) ? normalizeQuickMemoItem(data.item) : data.item, {
       fromCache: state.lastResponseCacheHit,
@@ -3797,6 +4027,7 @@ function initEvents() {
   }
 
   el.newBtn.addEventListener("click", () => {
+    if (!confirmDiscardEditorChanges()) return;
     setBodyMode("text");
     fillEditor({
       projectName: "common",
@@ -4027,6 +4258,7 @@ async function initApp() {
   try {
     await loadRuntimeConfig();
     renderStorageInfo(null);
+    await loadPersistedUsageOverview();
     await loadMemos();
     await ensureQuickMemoExists();
   } catch (error) {

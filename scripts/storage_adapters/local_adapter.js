@@ -11,6 +11,11 @@ function extensionFromMimeType(mimeType) {
   if (value.includes("jpeg") || value.includes("jpg")) return "jpg";
   if (value.includes("webp")) return "webp";
   if (value.includes("gif")) return "gif";
+  if (value.includes("pdf")) return "pdf";
+  if (value.includes("json")) return "json";
+  if (value.includes("plain")) return "txt";
+  if (value.includes("markdown")) return "md";
+  if (value.includes("zip")) return "zip";
   return "bin";
 }
 
@@ -69,10 +74,11 @@ class LocalAdapter extends StorageAdapter {
     await fs.writeFile(targetPath, bytes);
     return {
       id: input.attachmentId,
-      kind: "image",
+      kind: input.kind ? String(input.kind) : "image",
       fileName: input.fileName ? String(input.fileName) : "",
       mimeType: input.mimeType,
       size: bytes.byteLength,
+      caption: input.caption ? String(input.caption) : "",
       width: input.width === undefined ? undefined : Number(input.width),
       height: input.height === undefined ? undefined : Number(input.height),
       storagePath: targetPath,
@@ -119,9 +125,11 @@ class LocalAdapter extends StorageAdapter {
       const saved = await targetAdapter.saveAttachment({
         memoId: resolvedMemoId,
         attachmentId: item.id,
+        kind: item.kind,
         fileName: item.fileName,
         mimeType: item.mimeType,
         bytes,
+        caption: item.caption,
         width: item.width,
         height: item.height
       });

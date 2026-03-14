@@ -1102,6 +1102,10 @@ function extractOpenAIResponseText(payload) {
   return chunks.join("\n").trim();
 }
 
+function getOpenAIApiKey() {
+  return String(process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || "").trim();
+}
+
 function getFirestoreTodaySnapshotFromSummary(firestoreSummary) {
   const perDay = Array.isArray(firestoreSummary?.perDay) ? firestoreSummary.perDay : [];
   const today = perDay[perDay.length - 1] || { read: 0, write: 0, delete: 0, ratePercent: {} };
@@ -1280,7 +1284,7 @@ async function summarizeUsageOverviewWithOpenAI({
     return { summary: fallbackSummary, model: "local-template" };
   }
 
-  const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
+  const apiKey = getOpenAIApiKey();
   if (!apiKey) {
     return { summary: fallbackSummary, model: "local-template" };
   }
@@ -1389,9 +1393,9 @@ async function summarizeUsageOverviewWithOpenAI({
 }
 
 async function summarizeMemoWithOpenAI({ threadTitle, memoBody }) {
-  const apiKey = String(process.env.OPENAI_API_KEY || "").trim();
+  const apiKey = getOpenAIApiKey();
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is not set.");
+    throw new Error("OPENAI_API_KEY or OPENAI_KEY is not set.");
   }
   const title = String(threadTitle || "").trim();
   const body = String(memoBody || "").trim();
@@ -1695,10 +1699,7 @@ async function main() {
     try {
       const ref = db.collection(COLLECTION).doc(req.params.id);
       const exists = await ref.get();
-      if (!exists.exists) {
-        res.status(404).json({ error: "Memo not found." });
-        return;
-      }
+      const createIfMissing = normalizeBool(req.body.createIfMissing, false);
 
       const patch = {
         projectName: normalizeString(req.body.projectName, "projectName"),
@@ -1713,6 +1714,23 @@ async function main() {
       }
       if (req.body.pinned !== undefined) {
         patch.pinned = normalizeBool(req.body.pinned, false);
+      }
+
+      if (!exists.exists) {
+        if (!createIfMissing) {
+          res.status(404).json({ error: "Memo not found." });
+          return;
+        }
+        assertExclusiveFlags(Boolean(patch.pinned), Boolean(patch.deletable));
+        const created = await memoService.createMemo({
+          ...patch,
+          id: req.params.id,
+          createdBy: req.body.createdBy || "codex-memo-web",
+          sourceThread: req.body.sourceThread || process.cwd()
+        });
+        clearCache();
+        res.status(201).json({ item: created });
+        return;
       }
 
       const current = exists.data() || {};
@@ -1892,7 +1910,7 @@ async function main() {
       res.json(result);
     } catch (error) {
       const message = error.message || "Failed to summarize memo.";
-      const code = String(message).includes("OPENAI_API_KEY") ? 503 : 500;
+      const code = /OPENAI_API_KEY|OPENAI_KEY/.test(String(message)) ? 503 : 500;
       res.status(code).json({ error: message });
     }
   });
@@ -1918,7 +1936,7 @@ async function main() {
       res.json(result);
     } catch (error) {
       const message = error.message || "Failed to summarize usage overview.";
-      const code = String(message).includes("OPENAI_API_KEY") ? 503 : 500;
+      const code = /OPENAI_API_KEY|OPENAI_KEY/.test(String(message)) ? 503 : 500;
       res.status(code).json({ error: message });
     }
   });

@@ -53,10 +53,11 @@ class FirebaseAdapter extends StorageAdapter {
     });
     return {
       id: input.attachmentId,
-      kind: "image",
+      kind: input.kind ? String(input.kind) : "image",
       fileName: input.fileName ? String(input.fileName) : "",
       mimeType: input.mimeType || "application/octet-stream",
       size: bytes.byteLength,
+      caption: input.caption ? String(input.caption) : "",
       width: input.width === undefined ? undefined : Number(input.width),
       height: input.height === undefined ? undefined : Number(input.height),
       storagePath: objectPath,
@@ -111,9 +112,11 @@ class FirebaseAdapter extends StorageAdapter {
       const saved = await targetAdapter.saveAttachment({
         memoId: resolvedMemoId,
         attachmentId: item.id,
+        kind: item.kind,
         fileName: item.fileName,
         mimeType: item.mimeType,
         bytes,
+        caption: item.caption,
         width: item.width,
         height: item.height
       });

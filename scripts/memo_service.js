@@ -126,9 +126,11 @@ function createMemoService({ db, collection, runtimeConfig, adapterRegistry, adm
         const saved = await adapter.saveAttachment({
           memoId: record.id,
           attachmentId: item.id,
+          kind: item.kind,
           fileName: item.fileName,
           mimeType: upload.mimeType,
           bytes: upload.bytes,
+          caption: item.caption,
           width: item.width,
           height: item.height
         });
@@ -201,7 +203,8 @@ function createMemoService({ db, collection, runtimeConfig, adapterRegistry, adm
     const now = new Date();
     const storageKind = resolveCreateStorageKind(input.storageKind);
     assertAllowedStorageKind(storageKind);
-    const ref = db.collection(collection).doc();
+    const requestedId = String(input.id || "").trim();
+    const ref = requestedId ? db.collection(collection).doc(requestedId) : db.collection(collection).doc();
     const persistResult = await persistAdapterMemo({
       id: ref.id,
       memoBody: input.memoBody,

@@ -1,26 +1,33 @@
 "use strict";
 
-const ATTACHMENT_REF_REGEX = /!\[(.*?)\]\(attachment:\/\/([A-Za-z0-9._-]+)\)/g;
+const ATTACHMENT_REF_REGEX = /(?:!\[(.*?)\]|\[(.*?)\])\(attachment:\/\/([A-Za-z0-9._-]+)\)/g;
 
 function normalizeAttachments(raw) {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((item) => item && typeof item === "object" && item.id)
-    .map((item) => ({
-      id: String(item.id),
-      kind: item.kind || "image",
-      fileName: item.fileName ? String(item.fileName) : "",
-      mimeType: item.mimeType || "application/octet-stream",
-      size: Number(item.size || 0),
-      caption: item.caption ? String(item.caption) : "",
-      width: item.width === undefined ? undefined : Number(item.width),
-      height: item.height === undefined ? undefined : Number(item.height),
-      storagePath: item.storagePath ? String(item.storagePath) : "",
-      previewUrl: item.previewUrl ? String(item.previewUrl) : "",
-      dataUrl: item.dataUrl ? String(item.dataUrl) : "",
-      dataBase64: item.dataBase64 ? String(item.dataBase64) : "",
-      createdAtISO: item.createdAtISO ? String(item.createdAtISO) : new Date().toISOString()
-    }));
+    .map((item) => {
+      const normalized = {
+        id: String(item.id),
+        kind: item.kind || "image",
+        fileName: item.fileName ? String(item.fileName) : "",
+        mimeType: item.mimeType || "application/octet-stream",
+        size: Number(item.size || 0),
+        caption: item.caption ? String(item.caption) : "",
+        storagePath: item.storagePath ? String(item.storagePath) : "",
+        previewUrl: item.previewUrl ? String(item.previewUrl) : "",
+        dataUrl: item.dataUrl ? String(item.dataUrl) : "",
+        dataBase64: item.dataBase64 ? String(item.dataBase64) : "",
+        createdAtISO: item.createdAtISO ? String(item.createdAtISO) : new Date().toISOString()
+      };
+      if (item.width !== undefined) {
+        normalized.width = Number(item.width);
+      }
+      if (item.height !== undefined) {
+        normalized.height = Number(item.height);
+      }
+      return normalized;
+    });
 }
 
 function syncMemoBodyAndAttachments(input) {
@@ -33,8 +40,8 @@ function syncMemoBodyAndAttachments(input) {
   let match = ATTACHMENT_REF_REGEX.exec(memoBody);
   while (match) {
     refs.push({
-      id: String(match[2]),
-      caption: String(match[1] || "").trim()
+      id: String(match[3]),
+      caption: String(match[1] || match[2] || "").trim()
     });
     match = ATTACHMENT_REF_REGEX.exec(memoBody);
   }

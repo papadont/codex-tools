@@ -10,6 +10,9 @@ Codex周辺ツールをまとめる保守用リポジトリ。
 - `codex-memo` (Web):
   - Firestore `codex-memo` を閲覧/編集/削除/ダウンロード
   - 起動URL: [http://localhost:4173](http://localhost:4173)
+- `codex-memo-share-macos`:
+  - macOS Share Extension の土台
+  - `text` / `url` を `codex-memo` の `/api/memos` へ送る
 
 ## ディレクトリ構成（要点）
 ```text
@@ -17,6 +20,10 @@ apps/
   codex-tools-menubar/
     build.sh
     main.swift
+  codex-memo-share-macos/
+    project.yml
+    HostApp/
+    ShareExtension/
   legacy-dual-launcher/
     build.sh
 
