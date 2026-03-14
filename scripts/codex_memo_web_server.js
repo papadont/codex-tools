@@ -1846,8 +1846,7 @@ async function main() {
       memoService.assertAllowedStorageKind(normalizeStorageKind(current.storageKind, "firebase"));
       assertExclusiveFlags(Boolean(current.pinned), deletable);
       await ref.update({
-        deletable,
-        updatedAtISO: new Date().toISOString()
+        deletable
       });
       const updated = await ref.get();
       clearCache();

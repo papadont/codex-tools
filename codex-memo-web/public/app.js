@@ -67,6 +67,16 @@ const STATUS_BANNER_DEFAULT_MS = 3000;
 const STATUS_BANNER_ERROR_MS = 12000;
 const STATUS_BANNER_FORCE_MS = 3000;
 const STATUS_BANNER_DANGER_MS = 0;
+const FONT_PREFS_STORAGE_KEY = "codex-memo-font-prefs-v1";
+const DEFAULT_MEMO_FONT_STACK = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+const DEFAULT_FONT_PREFS = Object.freeze({
+  memoFontName: "",
+  memoFontSize: 14
+});
+const FONT_BOOK_APP_CANDIDATES = [
+  "/System/Applications/Font Book.app",
+  "/Applications/Font Book.app"
+];
 
 let usageRefreshInFlight = null;
 let usageOverviewSummaryInFlight = null;
@@ -116,6 +126,13 @@ const el = {
   copyBodyBtn: document.getElementById("copyBodyBtn"),
   shareBtn: document.getElementById("shareBtn"),
   summaryBtn: document.getElementById("summaryBtn"),
+  fontSettingsBtn: document.getElementById("fontSettingsBtn"),
+  fontSettingsDialog: document.getElementById("fontSettingsDialog"),
+  memoFontNameInput: document.getElementById("memoFontNameInput"),
+  memoFontSizeInput: document.getElementById("memoFontSizeInput"),
+  fontSettingsSaveBtn: document.getElementById("fontSettingsSaveBtn"),
+  fontSettingsCancelBtn: document.getElementById("fontSettingsCancelBtn"),
+  fontSettingsResetBtn: document.getElementById("fontSettingsResetBtn"),
   statusBanner: document.getElementById("statusBanner"),
   statusTitle: document.getElementById("statusTitle"),
   statusIcon: document.getElementById("statusIcon"),
@@ -124,6 +141,81 @@ const el = {
 
 let summaryTooltipEl = null;
 let summaryRequestSeq = 0;
+
+function clampFontSize(value, fallback, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+function normalizeFontPrefs(raw = {}) {
+  return {
+    memoFontName: String(raw.memoFontName || "").trim(),
+    memoFontSize: clampFontSize(raw.memoFontSize, DEFAULT_FONT_PREFS.memoFontSize, 10, 32)
+  };
+}
+
+function buildFontFamilyValue(name, fallback) {
+  const raw = String(name || "").trim();
+  return raw ? `${raw}, ${fallback}` : fallback;
+}
+
+function syncFontSettingsInputs(prefs = DEFAULT_FONT_PREFS) {
+  if (el.memoFontNameInput) el.memoFontNameInput.value = prefs.memoFontName || "";
+  if (el.memoFontSizeInput) el.memoFontSizeInput.value = String(prefs.memoFontSize || DEFAULT_FONT_PREFS.memoFontSize);
+}
+
+function applyFontPrefs(rawPrefs = DEFAULT_FONT_PREFS) {
+  const prefs = normalizeFontPrefs(rawPrefs);
+  const root = document.documentElement;
+  root.style.setProperty("--memo-font-family", buildFontFamilyValue(prefs.memoFontName, DEFAULT_MEMO_FONT_STACK));
+  root.style.setProperty("--memo-font-size", `${prefs.memoFontSize}px`);
+  syncFontSettingsInputs(prefs);
+  return prefs;
+}
+
+function loadFontPrefs() {
+  try {
+    const raw = window.localStorage.getItem(FONT_PREFS_STORAGE_KEY);
+    if (!raw) return applyFontPrefs(DEFAULT_FONT_PREFS);
+    return applyFontPrefs(JSON.parse(raw));
+  } catch (error) {
+    console.warn("[codex-memo] font prefs load failed:", error);
+    return applyFontPrefs(DEFAULT_FONT_PREFS);
+  }
+}
+
+function saveFontPrefs(prefs) {
+  const normalized = applyFontPrefs(prefs);
+  window.localStorage.setItem(FONT_PREFS_STORAGE_KEY, JSON.stringify(normalized));
+  return normalized;
+}
+
+function currentFontPrefsFromDialog() {
+  return normalizeFontPrefs({
+    memoFontName: el.memoFontNameInput?.value || "",
+    memoFontSize: el.memoFontSizeInput?.value || DEFAULT_FONT_PREFS.memoFontSize
+  });
+}
+
+function openFontSettingsDialog() {
+  if (!el.fontSettingsDialog) return;
+  syncFontSettingsInputs(loadFontPrefs());
+  if (typeof el.fontSettingsDialog.showModal === "function") {
+    el.fontSettingsDialog.showModal();
+  } else {
+    el.fontSettingsDialog.setAttribute("open", "open");
+  }
+}
+
+function closeFontSettingsDialog() {
+  if (!el.fontSettingsDialog) return;
+  if (typeof el.fontSettingsDialog.close === "function") {
+    el.fontSettingsDialog.close();
+  } else {
+    el.fontSettingsDialog.removeAttribute("open");
+  }
+}
 
 async function request(path, options) {
   const res = await fetch(path, options);
@@ -1823,10 +1915,30 @@ function renderStorageInfo(item) {
   el.storageInfo.className = "hidden";
 }
 
+function selectedMemoItem() {
+  if (!state.selectedId || isSpecialPanelId(state.selectedId)) return null;
+  return state.items.find((memo) => memo.id === state.selectedId) || null;
+}
+
 function renderEditorDividerAccent(storageKind = "") {
   if (!el.editorDivider) return;
   el.editorDivider.className = "mb-2 mt-1 border-t-2";
   if (isQuickMemoSelected()) {
+    el.editorDivider.classList.add("border-[#d68e25]");
+    return;
+  }
+  const selected = selectedMemoItem();
+  if (selected?.pinned) {
+    const pinnedKind = normalizeStorageKind(selected.storageKind, storageKind);
+    el.editorDivider.className = "mb-2 mt-1 border-t-2";
+    if (pinnedKind === "icloud") {
+      el.editorDivider.classList.add("border-[#5f7fb8]");
+      return;
+    }
+    if (pinnedKind === "firebase") {
+      el.editorDivider.classList.add("border-[#d96f98]");
+      return;
+    }
     el.editorDivider.classList.add("border-[#d68e25]");
     return;
   }
@@ -1952,6 +2064,19 @@ async function openLocalPath(localPath) {
     body: JSON.stringify({ path: normalized, originalPath: requested })
   });
   setStatus(`Opened: ${data.openedPath || data.path || normalized}`, false, "force");
+}
+
+async function openFontBookApp() {
+  let lastError = null;
+  for (const candidate of FONT_BOOK_APP_CANDIDATES) {
+    try {
+      await openLocalPath(candidate);
+      return true;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("Font Book.app not found.");
 }
 
 async function tryOpenPathAtCursor() {
@@ -2235,7 +2360,7 @@ function setBodyMode(mode) {
   if (next === "preview") {
     el.bodyModeToggle.classList.add("border-[#5f8a5f]", "bg-[#5f8a5f]", "text-[#f3fff3]");
   } else {
-    el.bodyModeToggle.classList.add("border-[#d4d8e0]", "bg-[#fefdfb]", "text-[#4b5568]");
+    el.bodyModeToggle.classList.add("border-[#c9ced7]", "bg-[#fefdfb]", "text-[#4b5568]");
   }
 }
 
@@ -2818,7 +2943,7 @@ function renderList() {
     head.className = "block text-[12px] leading-4 text-[#f9fafb]";
     head.textContent = title;
     const badge = document.createElement("span");
-    badge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
+    badge.className = "usage-badge inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
     applyPressureBadgeBorder(badge, badgePressure);
     badge.textContent = badgeText;
     const main = document.createElement("div");
@@ -2971,7 +3096,7 @@ function renderList() {
   usageTop.className = state.usageTileCollapsed
     ? "mb-1 flex cursor-pointer items-center justify-between rounded-md border border-[#4b5563] bg-[#4b5563] px-2 py-1"
     : usageActive
-      ? "mb-1 flex cursor-pointer items-center justify-between rounded-md border border-[#ddd5c8] bg-[#fefdfb] px-2 py-1"
+      ? "mb-1 flex cursor-pointer items-center justify-between rounded-md border border-[#d8d8d8] bg-[#e9e9e9] px-2 py-1"
       : "mb-1 flex cursor-pointer items-center justify-between px-1";
   const usageLabel = document.createElement("span");
   usageLabel.className = state.usageTileCollapsed
@@ -3033,7 +3158,7 @@ function renderList() {
       label.className = "text-[11px] font-bold tracking-wide text-[#e5e7eb]";
       label.textContent = item.label;
       const badge = document.createElement("span");
-      badge.className = "inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
+      badge.className = "usage-badge inline-flex h-4 items-center rounded px-1 text-[10px] font-semibold leading-none border bg-[#ffffff] text-[#374151]";
       applyPressureBadgeBorder(badge, item.pressure);
       badge.textContent = item.text;
       wrap.appendChild(label);
@@ -3076,18 +3201,16 @@ function renderList() {
     const card = document.createElement("div");
     card.className = [
       "relative",
-      "overflow-hidden",
       "rounded-lg",
-      "border",
       "px-2.5",
       "py-2",
       quickActive
-        ? "border-[#d7a14a] bg-[#fefdfb]"
-        : "border-[#e0b46d] bg-[#f9f6f0]"
+        ? "bg-[#e9e9e9]"
+        : "bg-[#f7f6f3]"
     ].join(" ").trim();
 
     const accent = document.createElement("span");
-    accent.className = "absolute inset-y-0 left-0 w-[4px] bg-[#f0a020]";
+    accent.className = "absolute inset-y-[6px] left-0 w-[4px] rounded-none bg-[#f0a020]";
     card.appendChild(accent);
 
     const top = document.createElement("div");
@@ -3100,7 +3223,7 @@ function renderList() {
     const meta = document.createElement("div");
     meta.className = "mt-0.5 flex min-w-0 items-center gap-1";
     const typeBadge = document.createElement("span");
-    typeBadge.className = "inline-flex h-3.5 shrink-0 items-center rounded-md border border-[#db9a37] bg-[#e9ae57] px-1 text-[9px] font-semibold leading-none text-[#fff8ee]";
+    typeBadge.className = "list-badge inline-flex h-3.5 shrink-0 items-center rounded-md border border-[#db9a37] bg-[#e9ae57] px-1 text-[9px] font-semibold leading-none text-[#fff8ee]";
     typeBadge.textContent = "sticky";
     const dateText = document.createElement("small");
     dateText.className = "shrink-0 whitespace-nowrap text-[9px] leading-3.5 text-[#7f8aa3]";
@@ -3110,7 +3233,7 @@ function renderList() {
 
     if (hasBodyLink(quickMemoItem.memoBody || "")) {
       const linkBadge = document.createElement("span");
-      linkBadge.className = "inline-flex h-3.5 shrink-0 items-center rounded border border-[#d6dce8] px-1 text-[8px] font-medium leading-none text-[#7a859e]";
+      linkBadge.className = "list-badge inline-flex h-3.5 shrink-0 items-center rounded border border-[#d6dce8] px-1 text-[8px] font-medium leading-none text-[#7a859e]";
       linkBadge.textContent = "link";
       linkBadge.title = "Body contains link/path";
       meta.appendChild(linkBadge);
@@ -3118,7 +3241,7 @@ function renderList() {
 
     if (hasBodyImage(quickMemoItem)) {
       const imgBadge = document.createElement("span");
-      imgBadge.className = "inline-flex h-3.5 shrink-0 items-center rounded border border-[#dcd8ef] px-1 text-[8px] font-medium leading-none text-[#7d78a0]";
+      imgBadge.className = "list-badge inline-flex h-3.5 shrink-0 items-center rounded border border-[#dcd8ef] px-1 text-[8px] font-medium leading-none text-[#7d78a0]";
       imgBadge.textContent = "img";
       imgBadge.title = "Body contains image";
       meta.appendChild(imgBadge);
@@ -3147,27 +3270,27 @@ function renderList() {
     const pinBlocked = !isPinned && isDeletable;
     const delBlocked = !isDeletable && isPinned;
     const storageKind = normalizeStorageKind(item.storageKind, "firebase");
-    const accentClass = storageKind === "icloud" ? "bg-[#6e84ad]" : "bg-[#cf7896]";
+    const accentClass = isPinned
+      ? (storageKind === "icloud" ? "bg-[#5f7fb8]" : "bg-[#d96f98]")
+      : (storageKind === "icloud" ? "bg-[#7690b5]" : "bg-[#c07f92]");
     li.className = [
       "group",
       "relative",
-      "overflow-hidden",
       "cursor-pointer",
       "rounded-lg",
-      "border",
       "px-2.5",
       "py-2",
       "transition-colors",
-      "hover:bg-[#e7e1d7]",
+      "hover:bg-[#e3e3e2]",
       isActive
-        ? "border-[#ddd5c8] bg-[#fefdfb]"
+        ? "bg-[#e9e9e9]"
         : isPinned
-          ? "border-[#9aabc9] bg-[#f9f6f0]"
-          : "border-[#e5ddd2] bg-[#f9f6f0]"
+          ? "bg-[#f7f6f3]"
+          : "bg-[#f7f6f3]"
     ].join(" ");
 
     const accent = document.createElement("span");
-    accent.className = `absolute inset-y-0 left-0 w-[3px] ${accentClass}`;
+    accent.className = `absolute ${isPinned ? "inset-y-[6px] w-[4px]" : "inset-y-[6px] w-[2px]"} left-0 rounded-none ${accentClass}`;
     li.appendChild(accent);
 
     const topRow = document.createElement("div");
@@ -3183,6 +3306,7 @@ function renderList() {
     meta.className = "mt-0.5 flex min-w-0 items-center gap-1 pr-8";
     const typeBadge = document.createElement("span");
     typeBadge.className = [
+      "list-badge",
       "inline-flex",
       "h-3.5",
       "shrink-0",
@@ -4025,6 +4149,56 @@ function initEvents() {
   if (el.statusBanner) {
     el.statusBanner.addEventListener("click", hideStatusBanner);
   }
+  if (el.fontSettingsBtn) {
+    el.fontSettingsBtn.addEventListener("click", () => {
+      openFontSettingsDialog();
+    });
+  }
+  if (el.fontSettingsCancelBtn) {
+    el.fontSettingsCancelBtn.addEventListener("click", () => {
+      closeFontSettingsDialog();
+    });
+  }
+  if (el.fontSettingsResetBtn) {
+    el.fontSettingsResetBtn.addEventListener("click", () => {
+      const prefs = saveFontPrefs(DEFAULT_FONT_PREFS);
+      syncFontSettingsInputs(prefs);
+      setStatus("Font settings reset", false, "force");
+    });
+  }
+  if (el.fontSettingsDialog) {
+    el.fontSettingsDialog.addEventListener("click", (ev) => {
+      const rect = el.fontSettingsDialog.getBoundingClientRect();
+      const inside = (
+        ev.clientX >= rect.left
+        && ev.clientX <= rect.right
+        && ev.clientY >= rect.top
+        && ev.clientY <= rect.bottom
+      );
+      if (!inside) closeFontSettingsDialog();
+    });
+    el.fontSettingsDialog.addEventListener("close", () => {
+      syncFontSettingsInputs(loadFontPrefs());
+    });
+    el.fontSettingsDialog.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const prefs = saveFontPrefs(currentFontPrefsFromDialog());
+      syncFontSettingsInputs(prefs);
+      closeFontSettingsDialog();
+      setStatus("Font settings saved", false, "force");
+    });
+  }
+  [el.memoFontNameInput].filter(Boolean).forEach((input) => {
+    input.title = "Double-click to open Font Book";
+    input.addEventListener("dblclick", async (ev) => {
+      ev.preventDefault();
+      try {
+        await openFontBookApp();
+      } catch (error) {
+        setStatus(`Font Book open error: ${error.message || error}`, true);
+      }
+    });
+  });
 
   el.newBtn.addEventListener("click", () => {
     if (!confirmDiscardEditorChanges()) return;
@@ -4247,6 +4421,7 @@ function initEvents() {
 }
 
 initEvents();
+loadFontPrefs();
 fillEditor(null);
 setBodyMode("preview");
 updateBodyMode();

@@ -21,6 +21,81 @@
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
     <style>
+      :root {
+        --memo-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --memo-font-size: 14px;
+      }
+      #memoBodyInput,
+      #memoPreview {
+        font-family: var(--memo-font-family) !important;
+        font-size: var(--memo-font-size) !important;
+        line-height: 1.65 !important;
+      }
+      #fontSettingsDialog {
+        width: min(480px, calc(100vw - 32px));
+        border: 1px solid #c9ced7;
+        border-radius: 18px;
+        padding: 0;
+        background: #fffefd;
+        box-shadow: 0 22px 56px rgba(34, 40, 52, 0.22);
+        color: #4b5568;
+      }
+      #fontSettingsDialog::backdrop {
+        background: rgba(44, 48, 56, 0.18);
+        backdrop-filter: blur(2px);
+        -webkit-backdrop-filter: blur(2px);
+      }
+      .font-settings-shell {
+        padding: 16px 18px 14px;
+      }
+      .font-settings-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .font-settings-title {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 700;
+      }
+      .font-settings-copy {
+        margin: 4px 0 0;
+        font-size: 12px;
+        color: #768196;
+      }
+      .font-settings-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 112px;
+        gap: 10px 12px;
+      }
+      .font-settings-field label {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 11px;
+        color: #7a8398;
+      }
+      .font-settings-field input {
+        width: 100%;
+        height: 34px;
+        border: 1px solid #c9ced7;
+        border-radius: 10px;
+        background: #fefdfb;
+        padding: 0 10px;
+        color: #4b5568;
+      }
+      .font-settings-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 16px;
+      }
+      .font-settings-actions button {
+        height: 34px;
+        border-radius: 10px;
+        padding: 0 12px;
+      }
       .local-path-link {
         color: #4e6f9f;
         text-decoration: none;
@@ -194,9 +269,9 @@
       }
     </style>
   </head>
-  <body class="min-h-screen bg-[#f7f5f1] px-2 pb-0 pt-2 text-[#4b5568]">
-    <div class="relative mx-auto flex h-[calc(100vh-0.5rem)] max-w-[1320px] flex-col overflow-hidden rounded-t-2xl rounded-b-[18px] border border-[#ebe7e0] bg-[#fffefd]">
-      <header class="flex items-center gap-1.5 overflow-x-auto border-b border-[#f1ece4] bg-[#fffefd] px-2.5 py-1.5 whitespace-nowrap">
+  <body class="min-h-screen bg-[#f7f6f3] px-2 pb-0 pt-2 text-[#4b5568]">
+    <div class="relative mx-auto flex h-[calc(100vh-0.5rem)] max-w-[1320px] flex-col overflow-hidden rounded-b-[18px] bg-[#f7f6f3]">
+      <header class="flex items-center gap-1.5 overflow-x-auto rounded-t-2xl border border-[#b8b8b8] bg-[#ffffff] px-2.5 py-1.5 whitespace-nowrap">
         <div class="ml-1 mr-1 inline-flex shrink-0 items-center gap-1.5">
           <button id="autoRefreshIndicator" tabindex="-1" type="button" class="h-2.5 w-2.5 rounded-full border border-transparent" title="Auto refresh"></button>
           <h1 id="appTitle" class="cursor-pointer select-none text-sm font-semibold text-[#5e6f8d]" title="Double-click to reload">codex-memo</h1>
@@ -225,25 +300,31 @@
           </button>
           <button id="saveBtn" tabindex="-1" type="button" class="h-7 rounded-lg border border-[#6e84ad] bg-[#6e84ad] px-2 text-xs text-[#f7f9ff] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:brightness-100">Save</button>
           <button id="deleteBtn" tabindex="-1" type="button" class="h-7 rounded-lg border border-[#cf7896] bg-[#cf7896] px-2 text-xs text-[#fff7fb] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:brightness-100">Delete</button>
+          <button id="fontSettingsBtn" tabindex="-1" type="button" aria-label="Font settings" title="Font settings" class="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#c9ced7] bg-[#fefdfb] p-0 hover:border-[#7f90b0]">
+            <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4 fill-none stroke-[#6e7d99]" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3.2"></circle>
+              <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.2 1.2 0 0 1 0 1.7l-.5.5a1.2 1.2 0 0 1-1.7 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V19a1.2 1.2 0 0 1-1.2 1.2h-.8A1.2 1.2 0 0 1 12.5 19v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1.2 1.2 0 0 1-1.7 0l-.5-.5a1.2 1.2 0 0 1 0-1.7l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H8a1.2 1.2 0 0 1-1.2-1.2v-.8A1.2 1.2 0 0 1 8 11.5h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1.2 1.2 0 0 1 0-1.7l.5-.5a1.2 1.2 0 0 1 1.7 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V5a1.2 1.2 0 0 1 1.2-1.2h.8A1.2 1.2 0 0 1 15.7 5v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1.2 1.2 0 0 1 1.7 0l.5.5a1.2 1.2 0 0 1 0 1.7l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2A1.2 1.2 0 0 1 21.7 12v.8a1.2 1.2 0 0 1-1.2 1.2h-.2a1 1 0 0 0-.9.6Z"></path>
+            </svg>
+          </button>
         </div>
       </header>
 
       <main class="relative grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[300px_minmax(0,1fr)]">
-        <aside id="memoSidebar" class="overflow-auto border-b border-[#ebe4d9] bg-[#fbf8f3] p-3 md:border-b-0 md:border-r">
-          <div id="usagePanelSlot" class="-mt-3 sticky -top-3 z-10 -mx-3 bg-[#fbf8f3] px-3 pb-[5px] transition-shadow duration-150"></div>
+        <aside id="memoSidebar" class="overflow-auto border-b border-[#dcdcdc] bg-[#f7f6f3] p-3 md:border-b-0 md:border-r">
+          <div id="usagePanelSlot" class="-mt-3 sticky -top-3 z-10 -mx-3 bg-[#f7f6f3] px-3 pb-[5px] transition-shadow duration-150"></div>
           <ul id="memoList" class="space-y-1"></ul>
         </aside>
 
-        <section class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[#fefcf9] px-4 pb-0 pt-2">
+        <section class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[#f7f6f3] px-4 pb-0 pt-2">
           <div class="mb-2 flex flex-wrap items-end gap-2">
             <div class="w-full md:w-[210px]">
               <div class="flex h-7 items-center gap-2">
                 <label for="projectNameInput" class="shrink-0 text-[11px] text-[#7a8398]">project</label>
-                <input id="projectNameInput" type="text" class="h-7 min-w-0 flex-1 rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
+                <input id="projectNameInput" type="text" class="h-7 min-w-0 flex-1 rounded-lg border border-[#c9ced7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
               </div>
             </div>
             <div class="w-full md:w-[98px]">
-              <select id="memoTypeInput" tabindex="-1" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
+              <select id="memoTypeInput" tabindex="-1" class="h-7 w-full rounded-lg border border-[#c9ced7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
                 <option value="memo">memo</option>
                 <option value="handover memo">handover</option>
                 <option value="propomemo">propo</option>
@@ -253,19 +334,19 @@
             <div aria-hidden="true" class="hidden h-5 w-px self-center bg-[#e2ddd4] md:block"></div>
             <div class="w-full md:w-[192px]">
               <div class="flex items-center gap-1">
-                <select id="downloadFormatSelect" tabindex="-1" aria-label="Download format" class="h-7 w-[62px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
+                <select id="downloadFormatSelect" tabindex="-1" aria-label="Download format" class="h-7 w-[62px] rounded-lg border border-[#c9ced7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]">
                 <option value="txt">txt</option>
                 <option value="md">md</option>
                 <option value="json">json</option>
                 </select>
-                <button id="downloadBtn" tabindex="-1" type="button" aria-label="Download" title="Download" class="ml-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#d4d8e0] bg-[#fefdfb] p-0 hover:border-[#7f90b0]">
+                <button id="downloadBtn" tabindex="-1" type="button" aria-label="Download" title="Download" class="ml-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#c9ced7] bg-[#fefdfb] p-0 hover:border-[#7f90b0]">
                   <svg viewBox="0 0 24 24" aria-hidden="true" class="h-[18px] w-[18px] fill-none stroke-[#6e7d99]" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M12 5v9"></path>
                     <path d="m8.5 10.5 3.5 3.5 3.5-3.5"></path>
                     <path d="M5 18.5h14"></path>
                   </svg>
                 </button>
-                <button id="shareBtn" tabindex="-1" type="button" aria-label="Share" title="Share" class="ml-4 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#d4d8e0] bg-[#fefdfb] p-0 hover:border-[#7f90b0]">
+                <button id="shareBtn" tabindex="-1" type="button" aria-label="Share" title="Share" class="ml-4 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-[#c9ced7] bg-[#fefdfb] p-0 hover:border-[#7f90b0]">
                   <svg viewBox="0 0 24 24" aria-hidden="true" class="h-5 w-5 fill-none stroke-[#6e7d99]" stroke-width="1.9">
                     <path d="M12 16V5"></path>
                     <path d="M8.5 8.5 12 5l3.5 3.5"></path>
@@ -291,16 +372,16 @@
           <div class="mb-1 flex items-center gap-2">
             <label for="threadTitleInput" class="whitespace-nowrap text-[11px] text-[#7a8398]">thread</label>
             <div class="flex-1">
-              <input id="threadTitleInput" type="text" class="h-7 w-full rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
+              <input id="threadTitleInput" type="text" class="h-7 w-full rounded-lg border border-[#c9ced7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]" />
             </div>
             <div id="defaultStorageWrap" class="hidden">
-              <select id="defaultStorageSelect" tabindex="-1" class="h-7 w-[88px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]"></select>
+              <select id="defaultStorageSelect" tabindex="-1" class="h-7 w-[88px] rounded-lg border border-[#c9ced7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]"></select>
             </div>
             <div id="editStorageWrap" class="hidden">
-              <select id="editStorageSelect" tabindex="-1" aria-label="Edit storage" class="h-7 w-[88px] rounded-lg border border-[#d4d8e0] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]"></select>
+              <select id="editStorageSelect" tabindex="-1" aria-label="Edit storage" class="h-7 w-[88px] rounded-lg border border-[#c9ced7] bg-[#fefdfb] px-2 text-xs outline-none focus:border-[#7f90b0]"></select>
             </div>
             <span id="storageInfo" class="hidden">-</span>
-            <button id="bodyModeToggle" tabindex="-1" type="button" aria-label="Toggle body mode" aria-pressed="true" data-mode="preview" class="h-7 w-7 rounded-md border border-[#d4d8e0] bg-[#fefdfb] p-0 text-[10px] font-semibold leading-none text-[#4b5568] outline-none transition-colors hover:border-[#7f90b0] flex items-center justify-center" title="Preview mode">
+            <button id="bodyModeToggle" tabindex="-1" type="button" aria-label="Toggle body mode" aria-pressed="true" data-mode="preview" class="h-7 w-7 rounded-md border border-[#c9ced7] bg-[#fefdfb] p-0 text-[10px] font-semibold leading-none text-[#4b5568] outline-none transition-colors hover:border-[#7f90b0] flex items-center justify-center" title="Preview mode">
               <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4 fill-none stroke-current" stroke-width="1.8">
                 <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"></path>
                 <circle cx="12" cy="12" r="2.5"></circle>
@@ -317,8 +398,8 @@
                   </svg>
                 </button>
               </div>
-              <textarea id="memoBodyInput" rows="14" class="h-full min-h-0 flex-1 resize-y rounded-xl border border-[#d4d8e0] bg-[#fefdfb] px-2 py-2 text-sm outline-none focus:border-[#7f90b0]"></textarea>
-              <article id="memoPreview" class="markdown-preview hidden h-full min-h-0 flex-1 overflow-auto rounded-xl border border-[#d4d8e0] bg-[#fefdfb] px-3 py-2 text-sm"></article>
+              <textarea id="memoBodyInput" rows="14" class="h-full min-h-0 flex-1 resize-y rounded-xl border border-[#c9ced7] bg-[#fefdfb] px-2 py-2 text-sm outline-none focus:border-[#7f90b0]"></textarea>
+              <article id="memoPreview" class="markdown-preview hidden h-full min-h-0 flex-1 overflow-auto rounded-xl border border-[#c9ced7] bg-[#fefdfb] px-3 py-2 text-sm"></article>
             </div>
             <div class="mt-0.5 shrink-0">
               <input id="attachmentInput" type="file" accept="image/*" multiple class="hidden" />
@@ -339,6 +420,31 @@
         <div class="status-banner__title"><span id="statusIcon" class="status-banner__icon" aria-hidden="true">i</span><span id="statusTitle">Message</span></div>
         <p id="status" class="status-banner__text"></p>
       </aside>
+      <dialog id="fontSettingsDialog" aria-labelledby="fontSettingsTitle">
+        <form method="dialog" class="font-settings-shell">
+          <div class="font-settings-head">
+            <div>
+              <h2 id="fontSettingsTitle" class="font-settings-title">Font settings</h2>
+              <p class="font-settings-copy">未インストールのフォント名は自動で既定フォントへフォールバックするよ。</p>
+            </div>
+          </div>
+          <div class="font-settings-grid">
+            <div class="font-settings-field">
+              <label for="memoFontNameInput">Memo font name</label>
+              <input id="memoFontNameInput" type="text" placeholder='BIZ UDPGothic, Menlo, Hiragino Sans' />
+            </div>
+            <div class="font-settings-field">
+              <label for="memoFontSizeInput">Memo size</label>
+              <input id="memoFontSizeInput" type="number" min="10" max="32" step="1" placeholder="14" />
+            </div>
+          </div>
+          <div class="font-settings-actions">
+            <button id="fontSettingsResetBtn" type="button" class="border border-[#c9ced7] bg-[#fefdfb] text-[#4b5568]">Reset</button>
+            <button id="fontSettingsCancelBtn" type="button" class="border border-[#c9ced7] bg-[#fefdfb] text-[#4b5568]">Cancel</button>
+            <button id="fontSettingsSaveBtn" type="submit" class="border border-[#6e84ad] bg-[#6e84ad] text-[#f7f9ff]">Save</button>
+          </div>
+        </form>
+      </dialog>
     </div>
 
     <script src="/markdown_theme_codex_memo.js?v=20260223-01"></script>
