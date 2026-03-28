@@ -5,6 +5,7 @@ macOS の Share Extension から `codex-memo` へ送り込むための共有導�
 今の範囲:
 - macOS host app
 - macOS Share Extension
+- macOS Quick Look Preview Extension for `.md`
 - `text` / `url` / `image` / `file attachment` を `http://127.0.0.1:4173/api/memos` へ `POST`
 
 まだ未対応:
@@ -41,6 +42,14 @@ cd "/Users/hideki/Documents/develop/codex-tools/apps/codex-memo-share-macos"
 2. `codex-memo-share.app` を起動
 3. 他アプリで共有メニューから `codex-memo-share` を選ぶ
 4. コメントを足して `Post`
+
+## Quick Look
+`.md` は app を入れておくと Finder のスペースキー preview で独自表示される。
+
+今の実装:
+- ネイティブの Quick Look Preview Extension
+- codex-memo 寄りの見た目へ寄せた軽量 formatter
+- 対象 content type は `net.daringfireball.markdown`
 
 ## 保存 payload
 - `projectName`: `share`

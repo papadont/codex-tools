@@ -11,6 +11,7 @@ INSTALL_DIR="$HOME/Applications"
 INSTALL_APP_PATH="$INSTALL_DIR/$APP_BUNDLE"
 SOURCE_ITEMS=(
   "$SCRIPT_DIR/HostApp"
+  "$SCRIPT_DIR/QuickLookExtension"
   "$SCRIPT_DIR/ShareExtension"
   "$SCRIPT_DIR/Shared"
   "$SCRIPT_DIR/project.yml"

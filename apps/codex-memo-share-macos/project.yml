@@ -25,6 +25,8 @@ targets:
     dependencies:
       - target: CodexMemoShareExtension
         embed: true
+      - target: CodexMemoMarkdownQuickLookExtension
+        embed: true
 
   CodexMemoShareExtension:
     type: app-extension
@@ -68,3 +70,33 @@ targets:
     dependencies:
       - sdk: Social.framework
       - sdk: UniformTypeIdentifiers.framework
+
+  CodexMemoMarkdownQuickLookExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: QuickLookExtension
+      - path: Shared
+    info:
+      path: QuickLookExtension/Info.plist
+      properties:
+        CFBundleDisplayName: codex-memo Markdown Preview
+        CFBundleName: codex-memo Markdown Preview
+        NSExtension:
+          NSExtensionAttributes:
+            QLSupportedContentTypes:
+              - net.daringfireball.markdown
+            QLSupportsSearchableItems: false
+            QLIsDataBasedPreview: false
+          NSExtensionPointIdentifier: com.apple.quicklook.preview
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PreviewViewController
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hideki.codex-memo-share.quicklook
+        PRODUCT_NAME: CodexMemoMarkdownPreview
+        PRODUCT_MODULE_NAME: CodexMemoMarkdownPreview
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: QuickLookExtension/QuickLookExtension.entitlements
+    dependencies:
+      - sdk: Quartz.framework
+      - sdk: WebKit.framework
