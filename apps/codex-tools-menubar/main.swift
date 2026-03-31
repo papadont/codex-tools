@@ -17,10 +17,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ?? "\(homeDir)/.config/gcp/codex-tools-firestore-sa.json"
   private let hushLogPath = "/tmp/hush-pointer-dev.log"
   private let memoLogPath = "/tmp/codex-memo-web.log"
+  private let appLogPath = "/tmp/codex-tools-menubar.log"
+  private let npmPath = "/opt/homebrew/bin/npm"
+  private let nodePath = "/opt/homebrew/bin/node"
   private lazy var usageLatestPath = "\(codexToolsDir)/dist/usage-reports/weekly/latest.json"
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
+    ensureFileExists(at: appLogPath)
+    log("app launched")
     setupMenuBar()
     restartBoth()
     startStatusPolling()
@@ -28,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationWillTerminate(_ notification: Notification) {
+    log("app terminating")
     statusTimer?.invalidate()
     stopBoth()
   }
@@ -127,14 +133,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func restartHush() {
-    runShell("pkill -f \(shellQuote("\(regexEscape(hushDir)).*npm run dev")) || true")
+    log("restart hush")
+    runShell("pkill -f \(shellQuote("\(regexEscape(hushDir)).*\(regexEscape(npmPath)).*run dev")) || true")
     runShell("pkill -f \(shellQuote("\(regexEscape(hushDir)).*vite")) || true")
     hushProcess?.terminate()
-    hushProcess = launchShell("cd \(shellQuote(hushDir)) && npm run dev >> \(shellQuote(hushLogPath)) 2>&1")
+    hushProcess = launchShell("cd \(shellQuote(hushDir)) && \(shellQuote(npmPath)) run dev >> \(shellQuote(hushLogPath)) 2>&1")
     updateStatusItems()
   }
 
   private func restartMemo(mode: String) {
+    log("restart memo mode=\(mode)")
     runShell("pkill -f 'node .*scripts/codex_memo_web_server\\.js' || true")
     runShell("pkill -f \(shellQuote("\(regexEscape(codexToolsDir)).*npm run memo:web")) || true")
     memoProcess?.terminate()
@@ -147,11 +155,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func memoLaunchCommand(for mode: String) -> String {
     switch mode {
     case "icloud":
-      return "npm run memo:web:icloud"
+      return "\(shellQuote(npmPath)) run memo:web:icloud"
     case "firebase":
-      return "npm run memo:web:firebase"
+      return "\(shellQuote(npmPath)) run memo:web:firebase"
     default:
-      return "npm run memo:web"
+      return "\(shellQuote(npmPath)) run memo:web"
     }
   }
 
@@ -162,7 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func stopHush() {
-    runShell("pkill -f \(shellQuote("\(regexEscape(hushDir)).*npm run dev")) || true")
+    log("stop hush")
+    runShell("pkill -f \(shellQuote("\(regexEscape(hushDir)).*\(regexEscape(npmPath)).*run dev")) || true")
     runShell("pkill -f \(shellQuote("\(regexEscape(hushDir)).*vite")) || true")
     hushProcess?.terminate()
     hushProcess = nil
@@ -170,27 +179,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func stopMemo() {
+    log("stop memo")
     runShell("pkill -f 'node .*scripts/codex_memo_web_server\\.js' || true")
-    runShell("pkill -f \(shellQuote("\(regexEscape(codexToolsDir)).*npm run memo:web")) || true")
+    runShell("pkill -f \(shellQuote("\(regexEscape(codexToolsDir)).*\(regexEscape(npmPath)).*run memo:web")) || true")
     memoProcess?.terminate()
     memoProcess = nil
     updateStatusItems()
   }
 
   private func launchShell(_ command: String) -> Process {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-    process.arguments = ["-lc", command]
-    try? process.run()
+    let process = makeShellProcess(command)
+    log("launch shell: \(command)")
+    process.terminationHandler = { [weak self] finished in
+      self?.log("shell exit status=\(finished.terminationStatus) command=\(command)")
+    }
+    do {
+      try process.run()
+    } catch {
+      log("shell run failed: \(error) command=\(command)")
+    }
     return process
   }
 
   private func runShell(_ command: String) {
+    let process = makeShellProcess(command)
+    log("run shell: \(command)")
+    do {
+      try process.run()
+    } catch {
+      log("run shell failed: \(error) command=\(command)")
+      return
+    }
+    process.waitUntilExit()
+    log("run shell exit status=\(process.terminationStatus) command=\(command)")
+  }
+
+  private func makeShellProcess(_ command: String) -> Process {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-    process.arguments = ["-lc", command]
-    try? process.run()
-    process.waitUntilExit()
+    process.arguments = ["-c", command]
+    process.currentDirectoryURL = URL(fileURLWithPath: homeDir, isDirectory: true)
+
+    var environment = ProcessInfo.processInfo.environment
+    environment["HOME"] = homeDir
+    let basePath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    if let currentPath = environment["PATH"], !currentPath.isEmpty {
+      if currentPath.contains("/opt/homebrew/bin") {
+        environment["PATH"] = currentPath
+      } else {
+        environment["PATH"] = "\(basePath):\(currentPath)"
+      }
+    } else {
+      environment["PATH"] = basePath
+    }
+    environment["NODE"] = nodePath
+    process.environment = environment
+    log("shell env PATH=\(environment["PATH"] ?? "(nil)")")
+    return process
   }
 
   private func startStatusPolling() {
@@ -256,13 +301,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func isHushRunning() -> Bool {
-    return pgrep(pattern: "\(regexEscape(hushDir)).*npm run dev")
+    return pgrep(pattern: "\(regexEscape(hushDir)).*\(regexEscape(npmPath)).*run dev")
       || pgrep(pattern: "\(regexEscape(hushDir)).*vite")
   }
 
   private func isMemoRunning() -> Bool {
     return pgrep(pattern: "node .*scripts/codex_memo_web_server\\.js")
-      || pgrep(pattern: "\(regexEscape(codexToolsDir)).*npm run memo:web")
+      || pgrep(pattern: "\(regexEscape(codexToolsDir)).*\(regexEscape(npmPath)).*run memo:web")
   }
 
   private func shellQuote(_ value: String) -> String {
@@ -289,6 +334,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func ensureFileExists(at path: String) {
     if !FileManager.default.fileExists(atPath: path) {
       FileManager.default.createFile(atPath: path, contents: Data(), attributes: nil)
+    }
+  }
+
+  private func log(_ message: String) {
+    ensureFileExists(at: appLogPath)
+    let formatter = ISO8601DateFormatter()
+    let line = "[\(formatter.string(from: Date()))] \(message)\n"
+    guard let data = line.data(using: .utf8) else { return }
+    if let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: appLogPath)) {
+      defer { try? handle.close() }
+      _ = try? handle.seekToEnd()
+      try? handle.write(contentsOf: data)
     }
   }
 }
