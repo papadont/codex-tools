@@ -20,7 +20,7 @@ const state = {
   selectedCacheHit: false,
   showOnlyDeletable: false,
   storageFilterKind: "",
-  autoRefreshEnabled: false,
+  autoRefreshEnabled: true,
   usageTileCollapsed: false,
   codexUsageSummary: null,
   codexUsageError: "",
@@ -42,6 +42,8 @@ const state = {
   usageRefreshReason: "",
   persistedUsageOverview: null,
   editorAttachments: [],
+  markdownCssMemoId: null,
+  markdownCssMemoBody: "",
   pointerClientX: 0,
   pointerClientY: 0
 };
@@ -73,6 +75,236 @@ const DEFAULT_FONT_PREFS = Object.freeze({
   memoFontName: "",
   memoFontSize: 14
 });
+const MARKDOWN_CSS_MEMO_PROJECT_NAME = "codex-memo";
+const MARKDOWN_CSS_MEMO_TYPE = "keep";
+const MARKDOWN_CSS_MEMO_TITLE = "Markdown CSS";
+const DEFAULT_MARKDOWN_CUSTOM_CSS = [
+  "/* codex-memo markdown preview overrides */",
+  "/* ここに書いたCSSが preview にそのまま当たるよ */",
+  "/* 使うセレクタ例: .markdown-preview h1 / .markdown-preview pre code */",
+  "",
+  ".markdown-preview {",
+  "  color: #4b5568;",
+  "  background: transparent;",
+  "  line-height: 1.65;",
+  "  letter-spacing: 0;",
+  "  word-break: break-word;",
+  "  overflow-wrap: anywhere;",
+  "}",
+  "",
+  ".markdown-preview h1,",
+  ".markdown-preview h2,",
+  ".markdown-preview h3 {",
+  "  font-family: inherit;",
+  "  letter-spacing: 0;",
+  "}",
+  "",
+  ".markdown-preview h1 {",
+  "  color: #4f5f7e;",
+  "  font-size: 1.26em;",
+  "  font-weight: 700;",
+  "  line-height: 1.3;",
+  "  margin: 0.5em 0 0.72em;",
+  "  padding: 0 0 0.24em;",
+  "  border: 0;",
+  "  border-bottom: 1px solid #d8d3cc;",
+  "  border-radius: 0;",
+  "  background: transparent;",
+  "}",
+  "",
+  ".markdown-preview h2 {",
+  "  color: #605e5a;",
+  "  font-size: 1.05em;",
+  "  font-weight: 700;",
+  "  line-height: 1.35;",
+  "  margin: 0.95em 0 0.45em;",
+  "  padding-left: 0.5em;",
+  "  border-left: 2px solid #d8d3cc;",
+  "  border-bottom: 0;",
+  "  background: transparent;",
+  "}",
+  "",
+  ".markdown-preview h3 {",
+  "  color: #626b78;",
+  "  font-size: 1.02em;",
+  "  font-weight: 650;",
+  "  line-height: 1.35;",
+  "  margin: 0.8em 0 0.3em;",
+  "  padding: 0;",
+  "  border: 0;",
+  "}",
+  "",
+  ".markdown-preview p {",
+  "  color: inherit;",
+  "  font-size: 1em;",
+  "  font-weight: 400;",
+  "  line-height: 1.65;",
+  "  margin: 0.4em 0;",
+  "}",
+  "",
+  ".markdown-preview p + p {",
+  "  margin-top: 0.9em;",
+  "}",
+  "",
+  ".markdown-preview small {",
+  "  color: #64748b;",
+  "  font-size: 0.8em;",
+  "  line-height: 1.25;",
+  "}",
+  "",
+  ".markdown-preview ul,",
+  ".markdown-preview ol {",
+  "  margin: 0.7em 0;",
+  "  padding-left: 1.25em;",
+  "}",
+  "",
+  ".markdown-preview ul {",
+  "  list-style-type: disc;",
+  "}",
+  "",
+  ".markdown-preview ol {",
+  "  list-style-type: decimal;",
+  "}",
+  "",
+  ".markdown-preview li {",
+  "  display: list-item;",
+  "  margin: 0.22em 0;",
+  "}",
+  "",
+  ".markdown-preview ul.md-list-dash {",
+  "  list-style: none;",
+  "  padding-left: 0;",
+  "}",
+  "",
+  ".markdown-preview table {",
+  "  width: 100%;",
+  "  margin: 0.95em 0;",
+  "  border-collapse: collapse;",
+  "  font-size: 0.94em;",
+  "  table-layout: auto;",
+  "}",
+  "",
+  ".markdown-preview th,",
+  ".markdown-preview td {",
+  "  border: 1px solid #cbd5e1;",
+  "  padding: 4px 8px;",
+  "  vertical-align: top;",
+  "  text-align: left;",
+  "}",
+  "",
+  ".markdown-preview th {",
+  "  background: #f3f4f6;",
+  "  color: inherit;",
+  "  font-weight: 600;",
+  "}",
+  "",
+  ".markdown-preview blockquote {",
+  "  margin: 0.74em 0;",
+  "  padding: 0.28em 0 0.22em 1.02em;",
+  "  color: #5f5950;",
+  "  background-color: #f3f1ec;",
+  "  background-image: linear-gradient(#cfc8bf, #cfc8bf);",
+  "  background-repeat: no-repeat;",
+  "  background-size: 4px calc(100% - 18px);",
+  "  background-position: left 6px top 9px;",
+  "  border: 0;",
+  "  border-radius: 8px;",
+  "}",
+  "",
+  ".markdown-preview a {",
+  "  color: #4e6f9f;",
+  "  text-decoration: none;",
+  "  text-underline-offset: 2px;",
+  "}",
+  "",
+  ".markdown-preview a:hover {",
+  "  text-decoration: underline;",
+  "}",
+  "",
+  ".markdown-preview img {",
+  "  display: block;",
+  "  max-width: 100%;",
+  "  height: auto;",
+  "  margin: 0.7em 0;",
+  "  border: 1px solid rgba(91, 105, 129, 0.12);",
+  "  border-radius: 8px;",
+  "  box-shadow: none;",
+  "}",
+  "",
+  ".markdown-preview code {",
+  "  color: #f7f5ef;",
+  "  background: #666e79;",
+  "  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;",
+  "  font-size: 0.96em;",
+  "  font-weight: 400;",
+  "  line-height: 1.45;",
+  "  padding: 1px 4px;",
+  "  border: 1.5px solid #828a95;",
+  "  border-radius: 4px;",
+  "  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);",
+  "}",
+  "",
+  ".markdown-preview pre {",
+  "  color: #f7f5ef;",
+  "  background: #666e79;",
+  "  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;",
+  "  font-size: 0.96em;",
+  "  line-height: 1.45;",
+  "  margin: 0.95em 0;",
+  "  padding: 8px;",
+  "  overflow-x: hidden;",
+  "  overflow-y: auto;",
+  "  white-space: pre-wrap;",
+  "  word-break: break-word;",
+  "  overflow-wrap: anywhere;",
+  "  border: 1.5px solid #828a95;",
+  "  border-radius: 8px;",
+  "  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);",
+  "}",
+  "",
+  ".markdown-preview pre code {",
+  "  color: inherit;",
+  "  background: transparent;",
+  "  padding: 0;",
+  "  border: 0;",
+  "  border-radius: 0;",
+  "  box-shadow: none;",
+  "  white-space: inherit;",
+  "  word-break: inherit;",
+  "  overflow-wrap: inherit;",
+  "}",
+  "",
+  ".markdown-preview hr {",
+  "  margin: 1em 0;",
+  "  border: 0;",
+  "  border-top: 1px solid #d8d3cc;",
+  "}",
+  "",
+  ".markdown-preview :is(p, ul, ol, table, blockquote, pre) + h1,",
+  ".markdown-preview :is(p, ul, ol, table, blockquote, pre) + h2,",
+  ".markdown-preview :is(p, ul, ol, table, blockquote, pre) + h3 {",
+  "  margin-top: 1.25em;",
+  "}",
+  "",
+  ".markdown-preview p + :is(ul, ol, table, blockquote, pre),",
+  ".markdown-preview table + p,",
+  ".markdown-preview blockquote + p,",
+  ".markdown-preview pre + p {",
+  "  margin-top: 1.05em;",
+  "}",
+  "",
+  ".markdown-preview :is(ul, ol) + :is(ul, ol) {",
+  "  margin-top: 1.4em;",
+  "}",
+  "",
+  ".markdown-preview :is(table, blockquote, pre) + :is(ul, ol) {",
+  "  margin-top: 1.35em;",
+  "}",
+  "",
+  ".markdown-preview :is(ul, ol) + p {",
+  "  margin-top: 0.9em;",
+  "}"
+].join("\n");
 const FONT_BOOK_APP_CANDIDATES = [
   "/System/Applications/Font Book.app",
   "/Applications/Font Book.app"
@@ -126,7 +358,10 @@ const el = {
   copyBodyBtn: document.getElementById("copyBodyBtn"),
   shareBtn: document.getElementById("shareBtn"),
   summaryBtn: document.getElementById("summaryBtn"),
-  fontSettingsBtn: document.getElementById("fontSettingsBtn"),
+  appMenuBtn: document.getElementById("appMenuBtn"),
+  appMenuPanel: document.getElementById("appMenuPanel"),
+  menuMemoFontBtn: document.getElementById("menuMemoFontBtn"),
+  menuMarkdownCssBtn: document.getElementById("menuMarkdownCssBtn"),
   fontSettingsDialog: document.getElementById("fontSettingsDialog"),
   memoFontNameInput: document.getElementById("memoFontNameInput"),
   memoFontSizeInput: document.getElementById("memoFontSizeInput"),
@@ -215,6 +450,163 @@ function closeFontSettingsDialog() {
   } else {
     el.fontSettingsDialog.removeAttribute("open");
   }
+}
+
+function normalizeMarkdownCustomCss(raw) {
+  return typeof raw === "string" ? raw.replace(/\r\n?/g, "\n") : DEFAULT_MARKDOWN_CUSTOM_CSS;
+}
+
+function buildMarkdownCssMemoSeed(storageKind = currentDefaultStorageKind()) {
+  return {
+    projectName: MARKDOWN_CSS_MEMO_PROJECT_NAME,
+    memoType: MARKDOWN_CSS_MEMO_TYPE,
+    threadTitle: MARKDOWN_CSS_MEMO_TITLE,
+    memoBody: DEFAULT_MARKDOWN_CUSTOM_CSS,
+    storageKind: normalizeStorageKind(storageKind, currentDefaultStorageKind()),
+    attachments: [],
+    deletable: false
+  };
+}
+
+function isMarkdownCssMemoItem(item) {
+  return Boolean(
+    item
+    && String(item.projectName || "") === MARKDOWN_CSS_MEMO_PROJECT_NAME
+    && String(item.memoType || "") === MARKDOWN_CSS_MEMO_TYPE
+    && String(item.threadTitle || "") === MARKDOWN_CSS_MEMO_TITLE
+  );
+}
+
+function ensureMarkdownCustomCssStyleTag() {
+  let styleEl = document.getElementById("markdownCustomCssStyle");
+  if (!styleEl) {
+    styleEl = document.createElement("style");
+    styleEl.id = "markdownCustomCssStyle";
+    document.head.appendChild(styleEl);
+  }
+  return styleEl;
+}
+
+function strengthenMarkdownCustomCss(css) {
+  return String(css || "").replace(
+    /(^|[;{]\s*)([A-Za-z-]+\s*:\s*[^;{}]+)(;?)/g,
+    (match, prefix, declaration, suffix) => {
+      if (/!important\b/.test(declaration)) return match;
+      return `${prefix}${declaration} !important${suffix || ""}`;
+    }
+  );
+}
+
+function applyMarkdownCustomCss(rawCss = DEFAULT_MARKDOWN_CUSTOM_CSS) {
+  const css = normalizeMarkdownCustomCss(rawCss);
+  ensureMarkdownCustomCssStyleTag().textContent = strengthenMarkdownCustomCss(css);
+  return css;
+}
+
+function syncMarkdownCssMemoState(item) {
+  if (isMarkdownCssMemoItem(item)) {
+    state.markdownCssMemoId = item.id || null;
+    state.markdownCssMemoBody = normalizeMarkdownCustomCss(item.memoBody || DEFAULT_MARKDOWN_CUSTOM_CSS);
+    return state.markdownCssMemoBody;
+  }
+  if (!state.markdownCssMemoBody) {
+    state.markdownCssMemoBody = DEFAULT_MARKDOWN_CUSTOM_CSS;
+  }
+  return state.markdownCssMemoBody;
+}
+
+function upsertMemoInState(item) {
+  if (!item || !item.id) return;
+  const index = state.items.findIndex((memo) => memo.id === item.id);
+  if (index >= 0) {
+    state.items[index] = item;
+  } else {
+    state.items.unshift(item);
+  }
+}
+
+function applyMarkdownCustomCssFromMemo(item) {
+  return applyMarkdownCustomCss(syncMarkdownCssMemoState(item));
+}
+
+async function findMarkdownCssMemo() {
+  const existingInState = state.items.find((item) => isMarkdownCssMemoItem(item));
+  if (existingInState) {
+    syncMarkdownCssMemoState(existingInState);
+    return existingInState;
+  }
+  const params = new URLSearchParams();
+  params.set("projectName", MARKDOWN_CSS_MEMO_PROJECT_NAME);
+  params.set("memoType", MARKDOWN_CSS_MEMO_TYPE);
+  const data = await request(`/api/memos?${params.toString()}`);
+  const item = (Array.isArray(data.items) ? data.items : []).find((memo) => isMarkdownCssMemoItem(memo)) || null;
+  if (item) syncMarkdownCssMemoState(item);
+  return item;
+}
+
+async function ensureMarkdownCssMemo() {
+  const existing = await findMarkdownCssMemo();
+  if (existing) return existing;
+  const data = await request("/api/memos", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildMarkdownCssMemoSeed())
+  });
+  syncMarkdownCssMemoState(data.item);
+  return data.item;
+}
+
+async function openMarkdownCssMemo() {
+  if (!confirmDiscardEditorChanges()) return;
+  const existing = await findMarkdownCssMemo();
+  const item = existing || await ensureMarkdownCssMemo();
+  upsertMemoInState(item);
+  applyMarkdownCustomCssFromMemo(item);
+  fillEditor(item, { fromCache: false, editorStorageKind: item.storageKind });
+  setBodyMode("text");
+  updateBodyMode();
+  el.memoBodyInput.focus();
+  setStatus(existing ? "Markdown CSS memo" : "Markdown CSS memo created");
+}
+
+function isAppMenuOpen() {
+  return Boolean(el.appMenuPanel && !el.appMenuPanel.hidden);
+}
+
+function positionAppMenu() {
+  if (!el.appMenuBtn || !el.appMenuPanel) return;
+  const rect = el.appMenuBtn.getBoundingClientRect();
+  const panelWidth = el.appMenuPanel.offsetWidth || 220;
+  const panelHeight = el.appMenuPanel.offsetHeight || 96;
+  const gap = 6;
+  const left = Math.min(
+    Math.max(8, rect.right - panelWidth),
+    Math.max(8, window.innerWidth - panelWidth - 8)
+  );
+  const top = rect.bottom + gap + panelHeight <= window.innerHeight - 8
+    ? rect.bottom + gap
+    : Math.max(8, rect.top - panelHeight - gap);
+  el.appMenuPanel.style.left = `${Math.round(left)}px`;
+  el.appMenuPanel.style.top = `${Math.round(top)}px`;
+ }
+
+function openAppMenu() {
+  if (!el.appMenuPanel) return;
+  el.appMenuPanel.hidden = false;
+  positionAppMenu();
+  el.appMenuBtn?.setAttribute("aria-expanded", "true");
+}
+
+function closeAppMenu() {
+  if (!el.appMenuPanel) return;
+  el.appMenuPanel.hidden = true;
+  el.appMenuBtn?.setAttribute("aria-expanded", "false");
+}
+
+function toggleAppMenu(force) {
+  const next = typeof force === "boolean" ? force : !isAppMenuOpen();
+  if (next) openAppMenu();
+  else closeAppMenu();
 }
 
 async function request(path, options) {
@@ -574,11 +966,13 @@ function attachmentRoute(memoId, attachmentId) {
 
 function normalizeEditorAttachment(item) {
   if (!item || typeof item !== "object" || !item.id) return null;
+  const mimeType = item.mimeType || "application/octet-stream";
+  const kind = item.kind || (String(mimeType).toLowerCase().startsWith("image/") ? "image" : "file");
   return {
     id: String(item.id),
-    kind: item.kind || "image",
+    kind,
     fileName: item.fileName ? String(item.fileName) : "",
-    mimeType: item.mimeType || "application/octet-stream",
+    mimeType,
     size: Number(item.size || 0),
     caption: item.caption ? String(item.caption) : "",
     width: item.width === undefined ? undefined : Number(item.width),
@@ -882,6 +1276,10 @@ function insertAttachmentMarkdown(item) {
     ? `![${label}](attachment://${item.id})`
     : `[${label}](attachment://${item.id})`;
   if (bodyContainsAttachment(item.id)) return;
+  insertEditorToken(token);
+}
+
+function insertEditorToken(token) {
   const input = el.memoBodyInput;
   const start = Number.isInteger(input.selectionStart) ? input.selectionStart : input.value.length;
   const end = Number.isInteger(input.selectionEnd) ? input.selectionEnd : input.value.length;
@@ -920,20 +1318,27 @@ function readFileAsDataUrl(file) {
 }
 
 async function addImageFiles(fileList) {
-  const files = Array.from(fileList || []).filter((file) => String(file.type || "").startsWith("image/"));
+  const files = Array.from(fileList || []).filter((file) => {
+    const mimeType = String(file.type || "").toLowerCase();
+    const name = String(file.name || "").toLowerCase();
+    return mimeType.startsWith("image/") || mimeType === "application/pdf" || name.endsWith(".pdf");
+  });
   if (!files.length) {
-    setStatus("Image file not found", true);
+    setStatus("Image or PDF file not found", true);
     return;
   }
 
   for (const file of files) {
     const dataUrl = await readFileAsDataUrl(file);
-    const dimensions = await loadImageDimensions(dataUrl);
+    const isImage = String(file.type || "").startsWith("image/");
+    const dimensions = isImage
+      ? await loadImageDimensions(dataUrl)
+      : { width: undefined, height: undefined };
     const attachment = normalizeEditorAttachment({
       id: generateAttachmentId(),
-      kind: "image",
+      kind: isImage ? "image" : "file",
       fileName: file.name || "",
-      mimeType: file.type || "application/octet-stream",
+      mimeType: file.type || (String(file.name || "").toLowerCase().endsWith(".pdf") ? "application/pdf" : "application/octet-stream"),
       size: Number(file.size || 0),
       caption: file.name ? String(file.name).replace(/\.[^.]+$/, "") : "",
       width: dimensions.width,
@@ -949,12 +1354,107 @@ async function addImageFiles(fileList) {
   if (getBodyMode() === "preview") {
     renderMarkdownPreview();
   }
-  setStatus(`Added ${files.length} image${files.length > 1 ? "s" : ""}`);
+  setStatus(`Added ${files.length} attachment${files.length > 1 ? "s" : ""}`);
 }
 
 function filesFromDataTransfer(dataTransfer) {
   if (!dataTransfer || !dataTransfer.files) return [];
-  return Array.from(dataTransfer.files).filter((file) => String(file.type || "").startsWith("image/"));
+  return Array.from(dataTransfer.files).filter((file) => {
+    const mimeType = String(file.type || "").toLowerCase();
+    const name = String(file.name || "").toLowerCase();
+    return mimeType.startsWith("image/") || mimeType === "application/pdf" || name.endsWith(".pdf");
+  });
+}
+
+function dataTransferTypeList(dataTransfer) {
+  if (!dataTransfer || !dataTransfer.types) return [];
+  return Array.from(dataTransfer.types).map((type) => String(type || "").toLowerCase());
+}
+
+function hasUrlDataTransferType(dataTransfer) {
+  const types = dataTransferTypeList(dataTransfer);
+  if (types.includes("text/uri-list") || types.includes("public.url")) return true;
+  return Boolean(extractDroppedUrl(readDataTransferValue(dataTransfer, "text/plain")));
+}
+
+function readDataTransferValue(dataTransfer, type) {
+  if (!dataTransfer || typeof dataTransfer.getData !== "function") return "";
+  try {
+    return String(dataTransfer.getData(type) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function extractDroppedUrl(raw) {
+  const lines = String(raw || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+  return lines.find((line) => /^[A-Za-z][A-Za-z0-9+.\-]*:[^\s]+$/.test(line)) || "";
+}
+
+function decodeHtmlEntities(text) {
+  if (!text) return "";
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = String(text);
+  return textarea.value.trim();
+}
+
+function stripHtmlTags(text) {
+  return decodeHtmlEntities(String(text || "").replace(/<[^>]+>/g, " "));
+}
+
+function extractHtmlAnchorPayload(rawHtml) {
+  const html = String(rawHtml || "").trim();
+  if (!html) return null;
+  const anchorMatch = html.match(/<a\b[^>]*href=(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a>/i);
+  if (!anchorMatch) return null;
+  const url = extractDroppedUrl(anchorMatch[2]);
+  if (!url) return null;
+  const label = stripHtmlTags(anchorMatch[3]).replace(/\s+/g, " ").trim();
+  return {
+    url,
+    label
+  };
+}
+
+function droppedUrlPayload(dataTransfer) {
+  const htmlPayload = extractHtmlAnchorPayload(readDataTransferValue(dataTransfer, "text/html"));
+  const plainText = readDataTransferValue(dataTransfer, "text/plain");
+  const url = htmlPayload?.url || extractDroppedUrl(
+    readDataTransferValue(dataTransfer, "text/uri-list")
+    || readDataTransferValue(dataTransfer, "public.url")
+    || plainText
+  );
+  if (!url) return null;
+
+  const titleCandidate = htmlPayload?.label
+    || readDataTransferValue(dataTransfer, "public.url-name")
+    || plainText;
+  const label = titleCandidate && titleCandidate !== url && !extractDroppedUrl(titleCandidate)
+    ? titleCandidate.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || ""
+    : "";
+
+  return {
+    url,
+    label
+  };
+}
+
+function insertDroppedUrlLink(dataTransfer) {
+  const payload = droppedUrlPayload(dataTransfer);
+  if (!payload) return false;
+  const token = payload.label
+    ? `[${payload.label}](${payload.url})`
+    : payload.url;
+  insertEditorToken(token);
+  updateSaveButtonState();
+  if (getBodyMode() === "preview") {
+    renderMarkdownPreview();
+  }
+  setStatus(`Inserted link: ${payload.label || payload.url}`);
+  return true;
 }
 
 function setDropHint(active) {
@@ -1695,6 +2195,16 @@ function currentPayload() {
   if (isQuickMemoSelected()) {
     return quickMemoSavePayload();
   }
+  if (isMarkdownCssMemoItem(selectedMemoItem())) {
+    return {
+      projectName: MARKDOWN_CSS_MEMO_PROJECT_NAME,
+      memoType: MARKDOWN_CSS_MEMO_TYPE,
+      threadTitle: MARKDOWN_CSS_MEMO_TITLE,
+      memoBody: el.memoBodyInput.value.trim(),
+      storageKind: currentEditingStorageKind(),
+      attachments: []
+    };
+  }
   return {
     projectName: el.projectNameInput.value.trim(),
     memoType: el.memoTypeInput.value,
@@ -1706,6 +2216,16 @@ function currentPayload() {
 }
 
 function currentEditorSnapshot() {
+  if (isMarkdownCssMemoItem(selectedMemoItem())) {
+    return {
+      projectName: MARKDOWN_CSS_MEMO_PROJECT_NAME,
+      memoType: MARKDOWN_CSS_MEMO_TYPE,
+      threadTitle: MARKDOWN_CSS_MEMO_TITLE,
+      memoBody: el.memoBodyInput.value,
+      storageKind: currentEditingStorageKind(),
+      attachments: ""
+    };
+  }
   return {
     projectName: el.projectNameInput.value,
     memoType: el.memoTypeInput.value,
@@ -1720,6 +2240,9 @@ function hasRequiredPayloadFields() {
   if (isQuickMemoSelected()) {
     return Boolean(el.memoBodyInput.value.trim());
   }
+  if (isMarkdownCssMemoItem(selectedMemoItem())) {
+    return Boolean(el.memoBodyInput.value.trim());
+  }
   return Boolean(
     el.projectNameInput.value.trim() &&
     el.threadTitleInput.value.trim() &&
@@ -1729,7 +2252,9 @@ function hasRequiredPayloadFields() {
 
 function currentPayloadValidationError() {
   if (!hasRequiredPayloadFields()) {
-    return "projectName / threadTitle / memoBody are required";
+    return isMarkdownCssMemoItem(selectedMemoItem())
+      ? "memoBody is required"
+      : "projectName / threadTitle / memoBody are required";
   }
   return "";
 }
@@ -2219,7 +2744,7 @@ function markdownToHtml(source) {
   if (window.DOMPurify && typeof window.DOMPurify.sanitize === "function") {
     // Preserve internal attachment:// URLs so preview can swap them to signed/local URLs later.
     html = window.DOMPurify.sanitize(html, {
-      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|ftp|tel|attachment):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
+      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|ftp|tel|attachment|message):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
     });
   }
   return html || "<p></p>";
@@ -2245,6 +2770,16 @@ function applyAttachmentPreviewLinks(root) {
   });
 }
 
+function applyMarkdownTableAlignments(root) {
+  if (!root) return;
+  root.querySelectorAll("th, td").forEach((cell) => {
+    const align = String(cell.getAttribute("align") || "").trim().toLowerCase();
+    if (align === "left" || align === "center" || align === "right") {
+      cell.style.textAlign = align;
+    }
+  });
+}
+
 function applyMarkdownPreviewPresentation(root) {
   if (!root) return;
   applyAttachmentPreviewLinks(root);
@@ -2257,6 +2792,7 @@ function applyMarkdownPreviewPresentation(root) {
   if (window.CodexMemoMarkdownTheme && typeof window.CodexMemoMarkdownTheme.apply === "function") {
     window.CodexMemoMarkdownTheme.apply(root);
   }
+  applyMarkdownTableAlignments(root);
 }
 
 function createRenderedMarkdownRoot(source) {
@@ -2627,18 +3163,18 @@ async function clearQuickMemo() {
   }
 }
 
-function memoTypeBadgeClass(memoType) {
+function memoTypeBadgeTone(memoType) {
   switch (memoType) {
     case "memo":
-      return "border-[#d2d6de] bg-[#f3f5f8] text-[#5f6674]";
+      return { borderColor: "rgba(142, 155, 176, 0.86)", backgroundColor: "rgba(124, 138, 161, 0.94)", color: "#fff8ee" };
     case "handover memo":
-      return "border-[#e5c6a0] bg-[#f9efe2] text-[#9a6330]";
+      return { borderColor: "rgba(204, 143, 86, 0.86)", backgroundColor: "rgba(185, 123, 67, 0.94)", color: "#fff8ee" };
     case "keep":
-      return "border-[#9fcca0] bg-[#e9f5e9] text-[#4e7a4e]";
+      return { borderColor: "rgba(108, 174, 111, 0.88)", backgroundColor: "rgba(87, 168, 93, 0.94)", color: "#fff8ee" };
     case "propomemo":
-      return "border-[#d8c0a5] bg-[#f6ecdf] text-[#8c6a43]";
+      return { borderColor: "rgba(185, 146, 104, 0.86)", backgroundColor: "rgba(164, 123, 80, 0.94)", color: "#fff8ee" };
     default:
-      return "border-[#d7dce7] bg-[#f3f5fa] text-[#66738f]";
+      return { borderColor: "rgba(134, 148, 178, 0.86)", backgroundColor: "rgba(116, 131, 163, 0.94)", color: "#fff8ee" };
   }
 }
 
@@ -3206,7 +3742,7 @@ function renderList() {
       "py-2",
       quickActive
         ? "bg-[#e9e9e9]"
-        : "bg-[#f7f6f3]"
+        : "bg-[#f6f7f5]"
     ].join(" ").trim();
 
     const accent = document.createElement("span");
@@ -3285,8 +3821,8 @@ function renderList() {
       isActive
         ? "bg-[#e9e9e9]"
         : isPinned
-          ? "bg-[#f7f6f3]"
-          : "bg-[#f7f6f3]"
+          ? "bg-[#f6f7f5]"
+          : "bg-[#f6f7f5]"
     ].join(" ");
 
     const accent = document.createElement("span");
@@ -3316,9 +3852,9 @@ function renderList() {
       "px-1",
       "text-[9px]",
       "font-semibold",
-      "leading-none",
-      memoTypeBadgeClass(item.memoType)
+      "leading-none"
     ].join(" ");
+    Object.assign(typeBadge.style, memoTypeBadgeTone(item.memoType));
     typeBadge.textContent = displayMemoTypeLabel(item.memoType);
     const metaText = document.createElement("small");
     metaText.className = "block min-w-0 truncate whitespace-nowrap text-[9px] leading-3.5 text-[#78829a]";
@@ -3451,6 +3987,7 @@ function fillEditor(item, options = {}) {
   const isUsagePanel = normalizedItem && normalizedItem.id === USAGE_PANEL_ID;
   const isCodexPanel = normalizedItem && normalizedItem.id === CODEX_USAGE_PANEL_ID;
   const isQuickMemo = isQuickMemoItem(normalizedItem);
+  const isMarkdownCssMemo = isMarkdownCssMemoItem(normalizedItem);
   const isReadOnlyPanel = Boolean(isOverviewPanel || isUsagePanel || isCodexPanel);
   state.selectedId = normalizedItem && normalizedItem.id ? normalizedItem.id : null;
   state.selectedCacheHit = Boolean(options.fromCache);
@@ -3466,6 +4003,11 @@ function fillEditor(item, options = {}) {
   el.memoTypeInput.value = normalizedItem?.memoType || "memo";
   el.threadTitleInput.value = normalizedItem?.threadTitle || "";
   el.memoBodyInput.value = normalizedItem?.memoBody || "";
+  if (isMarkdownCssMemo) {
+    applyMarkdownCustomCssFromMemo(normalizedItem);
+  } else {
+    applyMarkdownCustomCss(state.markdownCssMemoBody || DEFAULT_MARKDOWN_CUSTOM_CSS);
+  }
   state.editorAttachments = normalizeEditorAttachments(normalizedItem?.attachments);
   renderAttachmentList();
   renderStorageInfo(state.selectedId ? normalizedItem : null);
@@ -3480,11 +4022,11 @@ function fillEditor(item, options = {}) {
         ? formatDate(state.codexUsageFetchedAtISO || state.codexUsageSummary?.fetchedAtISO)
         : renderDateWithCacheIndicator(normalizedItem?.updatedAtISO || normalizedItem?.createdAtISO || normalizedItem?.datetimeISO);
   }
-  el.projectNameInput.readOnly = isReadOnlyPanel || isQuickMemo;
-  el.threadTitleInput.readOnly = isReadOnlyPanel || isQuickMemo;
+  el.projectNameInput.readOnly = isReadOnlyPanel || isQuickMemo || isMarkdownCssMemo;
+  el.threadTitleInput.readOnly = isReadOnlyPanel || isQuickMemo || isMarkdownCssMemo;
   el.memoBodyInput.readOnly = isReadOnlyPanel;
-  el.memoTypeInput.disabled = isReadOnlyPanel || isQuickMemo;
-  el.addImageBtn.disabled = isReadOnlyPanel || isQuickMemo;
+  el.memoTypeInput.disabled = isReadOnlyPanel || isQuickMemo || isMarkdownCssMemo;
+  el.addImageBtn.disabled = isReadOnlyPanel || isQuickMemo || isMarkdownCssMemo;
   state.editorBaseline = isReadOnlyPanel ? null : currentEditorSnapshot();
   updateSaveButtonState();
   el.deleteBtn.disabled = isReadOnlyPanel;
@@ -3501,16 +4043,17 @@ function fillEditor(item, options = {}) {
       : state.showOnlyDeletable
         ? "ALL: delete all deletable docs (Shift: filter off)"
         : "ALL: delete all deletable docs (Shift: filter on)";
-  if (!el.bodyModeToggle.dataset.mode) {
-    setBodyMode("preview");
-  }
+  setBodyMode(options.bodyMode || "preview");
   updateBodyMode();
   renderList();
-  setStatus(isReadOnlyPanel ? "Usage detail view" : (isQuickMemo ? "Quick Memo" : ""));
+  setStatus(isReadOnlyPanel ? "Usage detail view" : (isQuickMemo ? "Quick Memo" : (isMarkdownCssMemo ? "Markdown CSS memo" : "")));
 }
 
 function applyUpdatedMemo(updated) {
-  state.items = state.items.map((memo) => (memo.id === updated.id ? updated : memo));
+  if (isMarkdownCssMemoItem(updated)) {
+    applyMarkdownCustomCssFromMemo(updated);
+  }
+  upsertMemoInState(updated);
   if (state.selectedId === updated.id) {
     fillEditor(updated, { fromCache: false });
   } else {
@@ -3615,6 +4158,13 @@ async function loadMemos(options = {}) {
 
     const data = await request(`/api/memos?${params.toString()}`);
     state.items = data.items || [];
+    const markdownCssMemo = state.items.find((item) => isMarkdownCssMemoItem(item));
+    if (markdownCssMemo) {
+      syncMarkdownCssMemoState(markdownCssMemo);
+      if (!isMarkdownCssMemoItem(selectedMemoItem())) {
+        applyMarkdownCustomCss(state.markdownCssMemoBody);
+      }
+    }
     updateQuickMemoStateFromItems();
     try {
       await repairQuickMemoIfNeeded();
@@ -3709,6 +4259,9 @@ async function saveMemo(ev) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
+      if (isMarkdownCssMemoItem(data.item)) {
+        applyMarkdownCustomCssFromMemo(data.item);
+      }
       fillEditor(data.item, { fromCache: false });
       setStatus(`Updated: ${data.item.id}`);
     } else {
@@ -3717,6 +4270,9 @@ async function saveMemo(ev) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
+      if (isMarkdownCssMemoItem(data.item)) {
+        applyMarkdownCustomCssFromMemo(data.item);
+      }
       fillEditor(data.item, { fromCache: false });
       setStatus(`Created: ${data.item.id}`);
     }
@@ -4142,16 +4698,46 @@ function initEvents() {
       return;
     }
     hideSummaryTooltip();
+    if (target && target.closest && (target.closest("#appMenuBtn") || target.closest("#appMenuPanel"))) {
+      return;
+    }
+    closeAppMenu();
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") hideSummaryTooltip();
+    if (ev.key === "Escape") {
+      hideSummaryTooltip();
+      closeAppMenu();
+    }
   });
+  window.addEventListener("resize", () => {
+    if (isAppMenuOpen()) positionAppMenu();
+  });
+  window.addEventListener("scroll", () => {
+    if (isAppMenuOpen()) positionAppMenu();
+  }, { passive: true });
   if (el.statusBanner) {
     el.statusBanner.addEventListener("click", hideStatusBanner);
   }
-  if (el.fontSettingsBtn) {
-    el.fontSettingsBtn.addEventListener("click", () => {
+  if (el.appMenuBtn) {
+    el.appMenuBtn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      toggleAppMenu();
+    });
+  }
+  if (el.menuMemoFontBtn) {
+    el.menuMemoFontBtn.addEventListener("click", () => {
+      closeAppMenu();
       openFontSettingsDialog();
+    });
+  }
+  if (el.menuMarkdownCssBtn) {
+    el.menuMarkdownCssBtn.addEventListener("click", async () => {
+      closeAppMenu();
+      try {
+        await openMarkdownCssMemo();
+      } catch (error) {
+        setStatus(`Markdown CSS memo error: ${error.message || error}`, true);
+      }
     });
   }
   if (el.fontSettingsCancelBtn) {
@@ -4202,7 +4788,6 @@ function initEvents() {
 
   el.newBtn.addEventListener("click", () => {
     if (!confirmDiscardEditorChanges()) return;
-    setBodyMode("text");
     fillEditor({
       projectName: "common",
       memoType: "memo",
@@ -4211,7 +4796,7 @@ function initEvents() {
       storageKind: currentDefaultStorageKind(),
       attachments: [],
       deletable: false
-    }, { editorStorageKind: currentDefaultStorageKind() });
+    }, { editorStorageKind: currentDefaultStorageKind(), bodyMode: "text" });
     el.threadTitleInput.focus();
     setStatus("New memo mode");
   });
@@ -4298,12 +4883,15 @@ function initEvents() {
     try {
       await addImageFiles(ev.target.files);
     } catch (error) {
-      setStatus(`Image add error: ${error.message}`, true);
+      setStatus(`Attachment add error: ${error.message}`, true);
     } finally {
       ev.target.value = "";
     }
   });
   el.memoBodyInput.addEventListener("input", () => {
+    if (isMarkdownCssMemoItem(selectedMemoItem())) {
+      applyMarkdownCustomCss(el.memoBodyInput.value || "");
+    }
     if (getBodyMode() === "preview") {
       renderMarkdownPreview();
     }
@@ -4356,18 +4944,23 @@ function initEvents() {
     setBodyMode("text");
     updateBodyMode();
     el.memoBodyInput.focus();
+    requestAnimationFrame(() => {
+      el.memoBodyInput.setSelectionRange(0, 0);
+      el.memoBodyInput.scrollTop = 0;
+      el.memoBodyInput.scrollLeft = 0;
+    });
   });
   const dropTargets = [el.memoBodyInput, el.memoPreview, el.attachmentList].filter(Boolean);
   dropTargets.forEach((node) => {
     node.addEventListener("dragenter", (ev) => {
       if (!canAcceptEditorImageInput()) return;
-      if (filesFromDataTransfer(ev.dataTransfer).length === 0) return;
+      if (filesFromDataTransfer(ev.dataTransfer).length === 0 && !hasUrlDataTransferType(ev.dataTransfer)) return;
       ev.preventDefault();
       setDropHint(true);
     });
     node.addEventListener("dragover", (ev) => {
       if (!canAcceptEditorImageInput()) return;
-      if (filesFromDataTransfer(ev.dataTransfer).length === 0) return;
+      if (filesFromDataTransfer(ev.dataTransfer).length === 0 && !hasUrlDataTransferType(ev.dataTransfer)) return;
       ev.preventDefault();
       if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";
       setDropHint(true);
@@ -4380,14 +4973,21 @@ function initEvents() {
     node.addEventListener("drop", async (ev) => {
       if (!canAcceptEditorImageInput()) return;
       const files = filesFromDataTransfer(ev.dataTransfer);
-      if (files.length === 0) return;
+      const hasUrlPayload = hasUrlDataTransferType(ev.dataTransfer);
+      if (files.length === 0 && !hasUrlPayload) return;
       ev.preventDefault();
       setDropHint(false);
+      if (files.length === 0) {
+        if (!insertDroppedUrlLink(ev.dataTransfer)) {
+          setStatus("Dropped URL not found", true);
+        }
+        return;
+      }
       try {
         await addImageFiles(files);
-        setStatus(`Added ${files.length} image${files.length > 1 ? "s" : ""} by drop`);
+        setStatus(`Added ${files.length} attachment${files.length > 1 ? "s" : ""} by drop`);
       } catch (error) {
-        setStatus(`Image drop error: ${error.message}`, true);
+        setStatus(`Attachment drop error: ${error.message}`, true);
       }
     });
   });
@@ -4403,9 +5003,9 @@ function initEvents() {
     ev.preventDefault();
     try {
       await addImageFiles(files);
-      setStatus(`Added ${files.length} image${files.length > 1 ? "s" : ""} from paste`);
+      setStatus(`Added ${files.length} attachment${files.length > 1 ? "s" : ""} from paste`);
     } catch (error) {
-      setStatus(`Image paste error: ${error.message}`, true);
+      setStatus(`Attachment paste error: ${error.message}`, true);
     }
   });
   el.projectNameInput.addEventListener("input", updateSaveButtonState);
@@ -4435,6 +5035,8 @@ async function initApp() {
     renderStorageInfo(null);
     await loadPersistedUsageOverview();
     await loadMemos();
+    const markdownCssMemo = await findMarkdownCssMemo().catch(() => null);
+    applyMarkdownCustomCssFromMemo(markdownCssMemo);
     await ensureQuickMemoExists();
   } catch (error) {
     setStatus(`Init error: ${error.message}`, true);

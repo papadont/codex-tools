@@ -25,6 +25,7 @@ const STORAGE_USAGE_CACHE_TTL_MS = Number(process.env.STORAGE_USAGE_CACHE_TTL_MS
 const OPENAI_COSTS_CACHE_TTL_MS = Number(process.env.OPENAI_COSTS_CACHE_TTL_MS || 180_000);
 const CODEX_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
+const GEMINI_GENERATE_CONTENT_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const OPENAI_COSTS_ENDPOINT = "https://api.openai.com/v1/organization/costs";
 const DEFAULT_BUDGET_JPY = Number(process.env.USAGE_SOFT_BUDGET_JPY || 5000);
 
@@ -1106,6 +1107,28 @@ function getOpenAIApiKey() {
   return String(process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || "").trim();
 }
 
+function getGeminiApiKey() {
+  return String(
+    process.env.GEMINI_API_KEY
+    || process.env.GOOGLE_AI_STUDIO_API_KEY
+    || process.env.GOOGLE_API_KEY
+    || ""
+  ).trim();
+}
+
+function extractGeminiResponseText(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
+  const first = candidates[0] || null;
+  const parts = Array.isArray(first?.content?.parts) ? first.content.parts : [];
+  const chunks = [];
+  for (const part of parts) {
+    const text = typeof part?.text === "string" ? part.text : "";
+    if (text) chunks.push(text);
+  }
+  return chunks.join("\n").trim();
+}
+
 function getFirestoreTodaySnapshotFromSummary(firestoreSummary) {
   const perDay = Array.isArray(firestoreSummary?.perDay) ? firestoreSummary.perDay : [];
   const today = perDay[perDay.length - 1] || { read: 0, write: 0, delete: 0, ratePercent: {} };
@@ -1237,9 +1260,24 @@ function shouldUseAiUsageOverviewSummary() {
   return String(process.env.USAGE_OVERVIEW_SUMMARY_MODE || "").trim().toLowerCase() === "ai";
 }
 
+function getUsageOverviewSummaryMode() {
+  const value = String(process.env.USAGE_OVERVIEW_SUMMARY_MODE || "").trim().toLowerCase();
+  return value || "local";
+}
+
+function getUsageOverviewSummaryProvider() {
+  const value = String(process.env.USAGE_OVERVIEW_SUMMARY_PROVIDER || "").trim().toLowerCase();
+  return value || "openai";
+}
+
 function getUsageOverviewSummaryModel() {
   const value = String(process.env.USAGE_OVERVIEW_SUMMARY_MODEL || "").trim();
   return value || "gpt-4o-mini";
+}
+
+function getMemoSummaryProvider() {
+  const value = String(process.env.MEMO_SUMMARY_PROVIDER || "").trim().toLowerCase();
+  return value || "openai";
 }
 
 function getMemoSummaryModel() {
@@ -1281,12 +1319,12 @@ async function summarizeUsageOverviewWithOpenAI({
   const model = getUsageOverviewSummaryModel();
 
   if (!shouldUseAiUsageOverviewSummary()) {
-    return { summary: fallbackSummary, model: "local-template" };
+    return { summary: fallbackSummary, model: "local-template(mode!=ai)" };
   }
 
   const apiKey = getOpenAIApiKey();
   if (!apiKey) {
-    return { summary: fallbackSummary, model: "local-template" };
+    return { summary: fallbackSummary, model: "local-template(no-openai-key)" };
   }
 
   const input = [
@@ -1392,6 +1430,146 @@ async function summarizeUsageOverviewWithOpenAI({
   };
 }
 
+async function summarizeUsageOverviewWithGemini({
+  firestoreSummary,
+  codexSummary,
+  storageSummary,
+  openaiSummary,
+  roughCostSummary
+}) {
+  if (!firestoreSummary || !codexSummary) throw new Error("firestoreSummary and codexSummary are required.");
+
+  const fsToday = getFirestoreTodaySnapshotFromSummary(firestoreSummary);
+  const fsTrend = computeFirestore14dTrendFromSummary(firestoreSummary);
+  const codexSecondary = codexSummary?.secondaryWindow || null;
+  const codexWeeklyTiming = buildCodexWeeklyTimingContext(codexSummary);
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const dayOfMonth = now.getDate();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const elapsedMonthRatio = dayOfMonth / Math.max(1, daysInMonth);
+  const openaiTotalUsd30d = Number(openaiSummary?.available ? openaiSummary?.totalUsd30d || 0 : 0);
+  const roughTotalJpy = Number(roughCostSummary?.totalJpy || 0);
+  const storagePercent = storageSummary?.estimate?.percentOfNoCost || {};
+  const limits = firestoreSummary?.limitsDaily || {};
+  const fallbackSummary = buildUsageOverviewFallbackSummary({
+    firestoreSummary,
+    codexSummary,
+    storageSummary,
+    openaiSummary,
+    roughCostSummary
+  });
+  const model = getUsageOverviewSummaryModel();
+
+  if (!shouldUseAiUsageOverviewSummary()) {
+    return { summary: fallbackSummary, model: "local-template(mode!=ai)" };
+  }
+
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
+    return { summary: fallbackSummary, model: "local-template(no-gemini-key)" };
+  }
+
+  const payloadInput = {
+    totalCost: {
+      roughTotalJpy: Number(roughTotalJpy.toFixed(0)),
+      storageJpy: Number(Number(roughCostSummary?.storageJpy || 0).toFixed(0)),
+      openaiJpy: Number(Number(roughCostSummary?.openaiJpy || 0).toFixed(0)),
+      redlineJpy: DEFAULT_BUDGET_JPY
+    },
+    codex: {
+      planType: codexSummary?.planType || null,
+      usedPercent: Number(codexSecondary?.usedPercent ?? 0),
+      remainingPercent: Number(codexSecondary?.remainingPercent ?? 0),
+      hoursUntilReset: codexWeeklyTiming?.hoursUntilWeeklyReset ?? null,
+      resetAtISO: codexSecondary?.resetAtISO || null
+    },
+    firestore: {
+      today: {
+        read: Number(fsTrend?.latest?.read || 0),
+        write: Number(fsTrend?.latest?.write || 0),
+        delete: Number(fsTrend?.latest?.delete || 0),
+        ratePercent: fsToday?.ratePercent || {}
+      },
+      limitsDaily: limits,
+      trend14d: fsTrend?.trend || {}
+    },
+    storage: {
+      estimatePercentOfNoCost: storagePercent || {}
+    },
+    openai: {
+      available: Boolean(openaiSummary?.available),
+      totalUsd30d: Number(openaiTotalUsd30d.toFixed(3)),
+      totalUsd14d: Number(Number(openaiSummary?.totalUsd14d || 0).toFixed(3))
+    },
+    month: {
+      dayOfMonth,
+      daysInMonth,
+      elapsedRatio: Number(elapsedMonthRatio.toFixed(4))
+    }
+  };
+
+  const prompt = [
+    "あなたはクラウドサービス利用状況のアナリストです。",
+    "入力のJSONを分析し、日本語の1段落（300〜400文字）で要約してください。",
+    "必ず含める: 主要メトリクス / コスト異常の兆候 / 最優先の最適化アクション。",
+    "禁止: 箇条書き、前置き、結論っぽい締め。",
+    "重要: Codexは週次リセット前提で、resetまでの時間に必ず触れる。",
+    "重要: OpenAIのusageが取得できている場合は課金発生要因にも触れる。",
+    "",
+    "INPUT(JSON):",
+    JSON.stringify(payloadInput)
+  ].join("\n");
+
+  const res = await fetch(`${GEMINI_GENERATE_CONTENT_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.2 }
+    })
+  });
+
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = payload?.error?.message || `Gemini API error (${res.status})`;
+    throw new Error(message);
+  }
+
+  const summary = extractGeminiResponseText(payload);
+  return {
+    summary: normalizeUsageOverviewSummary(summary, fallbackSummary),
+    model
+  };
+}
+
+async function summarizeUsageOverview({
+  firestoreSummary,
+  codexSummary,
+  storageSummary,
+  openaiSummary,
+  roughCostSummary
+}) {
+  const provider = getUsageOverviewSummaryProvider();
+  if (provider === "gemini") {
+    return summarizeUsageOverviewWithGemini({
+      firestoreSummary,
+      codexSummary,
+      storageSummary,
+      openaiSummary,
+      roughCostSummary
+    });
+  }
+  return summarizeUsageOverviewWithOpenAI({
+    firestoreSummary,
+    codexSummary,
+    storageSummary,
+    openaiSummary,
+    roughCostSummary
+  });
+}
+
 async function summarizeMemoWithOpenAI({ threadTitle, memoBody }) {
   const apiKey = getOpenAIApiKey();
   if (!apiKey) {
@@ -1453,6 +1631,55 @@ async function summarizeMemoWithOpenAI({ threadTitle, memoBody }) {
   return { summary, model };
 }
 
+async function summarizeMemoWithGemini({ threadTitle, memoBody }) {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is not set.");
+  }
+  const title = String(threadTitle || "").trim();
+  const body = String(memoBody || "").trim();
+  if (!body) throw new Error("memoBody is required.");
+  const clipped = body.slice(0, 20000);
+  const model = getMemoSummaryModel();
+
+  const prompt = [
+    "次の日本語メモを、3〜6行の流れる日本語（箇条書き禁止）で短く要約して。",
+    "事実と次アクションは落とさない。前置き・結論は不要。",
+    title ? `Thread: ${title}` : "",
+    "",
+    "Memo body:",
+    clipped
+  ].filter(Boolean).join("\n");
+
+  const res = await fetch(`${GEMINI_GENERATE_CONTENT_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.2 }
+    })
+  });
+
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const message = payload?.error?.message || `Gemini API error (${res.status})`;
+    throw new Error(message);
+  }
+  const summary = extractGeminiResponseText(payload);
+  if (!summary) {
+    throw new Error("Gemini response did not contain summary text.");
+  }
+  return { summary, model };
+}
+
+async function summarizeMemo({ threadTitle, memoBody }) {
+  const provider = getMemoSummaryProvider();
+  if (provider === "gemini") {
+    return summarizeMemoWithGemini({ threadTitle, memoBody });
+  }
+  return summarizeMemoWithOpenAI({ threadTitle, memoBody });
+}
+
 async function main() {
   const db = initFirestore();
   if (runtimeConfig.allowedAdapters.includes("firebase") && !process.env.CODEX_MEMO_FIREBASE_BUCKET) {
@@ -1488,8 +1715,13 @@ async function main() {
       ...runtimeConfig,
       adapterDetails: getAdapterRuntimeDetails(adapterRegistry),
       usdToJpy: Number(process.env.USD_TO_JPY || 150),
+      usageOverviewSummaryMode: getUsageOverviewSummaryMode(),
+      memoSummaryProvider: getMemoSummaryProvider(),
       memoSummaryModel: getMemoSummaryModel(),
-      usageOverviewSummaryModel: getUsageOverviewSummaryModel()
+      usageOverviewSummaryProvider: getUsageOverviewSummaryProvider(),
+      usageOverviewSummaryModel: getUsageOverviewSummaryModel(),
+      hasOpenAiSummaryKey: Boolean(getOpenAIApiKey()),
+      hasGeminiSummaryKey: Boolean(getGeminiApiKey())
     });
   });
 
@@ -1905,11 +2137,13 @@ async function main() {
         res.status(400).json({ error: "memoBody is required." });
         return;
       }
-      const result = await summarizeMemoWithOpenAI({ threadTitle, memoBody });
+      const result = await summarizeMemo({ threadTitle, memoBody });
       res.json(result);
     } catch (error) {
       const message = error.message || "Failed to summarize memo.";
-      const code = /OPENAI_API_KEY|OPENAI_KEY/.test(String(message)) ? 503 : 500;
+      const code = /OPENAI_API_KEY|OPENAI_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|GOOGLE_AI_STUDIO_API_KEY/.test(String(message))
+        ? 503
+        : 500;
       res.status(code).json({ error: message });
     }
   });
@@ -1925,7 +2159,7 @@ async function main() {
         res.status(400).json({ error: "firestoreSummary and codexSummary are required." });
         return;
       }
-      const result = await summarizeUsageOverviewWithOpenAI({
+      const result = await summarizeUsageOverview({
         firestoreSummary,
         codexSummary,
         storageSummary,
@@ -1935,7 +2169,9 @@ async function main() {
       res.json(result);
     } catch (error) {
       const message = error.message || "Failed to summarize usage overview.";
-      const code = /OPENAI_API_KEY|OPENAI_KEY/.test(String(message)) ? 503 : 500;
+      const code = /OPENAI_API_KEY|OPENAI_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|GOOGLE_AI_STUDIO_API_KEY/.test(String(message))
+        ? 503
+        : 500;
       res.status(code).json({ error: message });
     }
   });

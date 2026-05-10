@@ -61,17 +61,24 @@ CODEX_MEMO_FIREBASE_BUCKET="your-project.firebasestorage.app"
 任意:
 ```bash
 OPENAI_ADMIN_KEY="sk-admin-..."
+GEMINI_API_KEY="AIza..."
 USD_TO_JPY="150"
 USAGE_OVERVIEW_SUMMARY_MODE="local"
+USAGE_OVERVIEW_SUMMARY_PROVIDER="openai"
 USAGE_OVERVIEW_SUMMARY_MODEL="gpt-4o-mini"
+MEMO_SUMMARY_PROVIDER="openai"
 MEMO_SUMMARY_MODEL="gpt-4.1-nano"
 ```
 - `OPENAI_ADMIN_KEY` を入れると usage パネルで OpenAI API の 30日コストも表示する
 - 未設定時は OpenAI API cost は `unavailable` 表示になる
 - `USD_TO_JPY` を入れると OpenAI cost の円換算レートを上書きできる
 - `USAGE_OVERVIEW_SUMMARY_MODE=ai` で overview 要約にAIを使う
+- `USAGE_OVERVIEW_SUMMARY_PROVIDER=openai|gemini` で overview 要約の実行先を選べる（`gemini` は `GEMINI_API_KEY` が必要）
 - `USAGE_OVERVIEW_SUMMARY_MODEL` で overview 要約のモデルを上書きできる
+- `MEMO_SUMMARY_PROVIDER=openai|gemini` で通常メモ要約の実行先を選べる（`gemini` は `GEMINI_API_KEY` が必要）
 - `MEMO_SUMMARY_MODEL` で通常メモ要約のモデルを上書きできる
+
+`local-template(...)` に落ちるときは、`/api/runtime-config` の `usageOverviewSummaryMode` と `hasGeminiSummaryKey` を確認する（`mode!=ai` / `no-gemini-key` の切り分け用）。
 
 Firebase Storage をまだ有効化していない場合:
 - Firebase Console で Storage を有効化
