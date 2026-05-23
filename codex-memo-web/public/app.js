@@ -64,6 +64,14 @@ const FIREBASE_USAGE_PAGE_URL = "https://console.firebase.google.com/project/hus
 const STORAGE_USAGE_PAGE_URL = "https://console.firebase.google.com/project/hush-pointer/storage";
 const CODEX_USAGE_PAGE_URL = "https://chatgpt.com/codex/settings/usage";
 const OPENAI_USAGE_PAGE_URL = "https://platform.openai.com/usage";
+const AI_STUDIO_RATE_LIMIT_PAGE_URL = "https://aistudio.google.com/rate-limit?timeRange=last-90-days";
+const USAGE_REF_PAGE_URLS = [
+  FIREBASE_USAGE_PAGE_URL,
+  STORAGE_USAGE_PAGE_URL,
+  CODEX_USAGE_PAGE_URL,
+  OPENAI_USAGE_PAGE_URL,
+  AI_STUDIO_RATE_LIMIT_PAGE_URL
+];
 const OPENAI_COSTS_FETCH_TIMEOUT_MS = 20_000;
 const STATUS_BANNER_DEFAULT_MS = 3000;
 const STATUS_BANNER_ERROR_MS = 12000;
@@ -318,7 +326,7 @@ let statusBannerTimer = null;
 function usageSourceFooterLines() {
   return [
     "",
-    `<small><a href="#" class="usage-refs-trigger" data-open-usage-refs="1">refs:</a> [firestore usage](${FIREBASE_USAGE_PAGE_URL}) | [storage](${STORAGE_USAGE_PAGE_URL}) | [codex usage](${CODEX_USAGE_PAGE_URL}) | [openai usage](${OPENAI_USAGE_PAGE_URL})</small>`
+    `<small><a href="#" class="usage-refs-trigger" data-open-usage-refs="1">refs:</a> [firestore usage](${FIREBASE_USAGE_PAGE_URL}) | [storage](${STORAGE_USAGE_PAGE_URL}) | [codex usage](${CODEX_USAGE_PAGE_URL}) | [openai usage](${OPENAI_USAGE_PAGE_URL}) | [ai studio rate limits](${AI_STUDIO_RATE_LIMIT_PAGE_URL})</small>`
   ];
 }
 
@@ -2670,15 +2678,16 @@ function annotateUsageRefLinks(root) {
   if (!root) return;
   root.querySelectorAll("a").forEach((anchor) => {
     const href = String(anchor.getAttribute("href") || "").trim();
-    if (href === FIREBASE_USAGE_PAGE_URL || href === CODEX_USAGE_PAGE_URL) {
+    if (USAGE_REF_PAGE_URLS.includes(href)) {
       anchor.classList.add("usage-ref-link");
     }
   });
 }
 
 function openUsageRefs() {
-  window.open(FIREBASE_USAGE_PAGE_URL, "_blank", "noopener,noreferrer");
-  window.open(CODEX_USAGE_PAGE_URL, "_blank", "noopener,noreferrer");
+  USAGE_REF_PAGE_URLS.forEach((url) => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  });
 }
 
 function markdownToHtml(source) {

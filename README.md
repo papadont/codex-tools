@@ -111,6 +111,37 @@ Storage 接続確認:
 npm run firebase:storage:check
 ```
 
+### codex-memo MCP PoC
+read-only の stdio MCP server:
+```bash
+npm run memo:mcp
+```
+
+公開 tool:
+- `list_recent_memos`
+- `search_memos`
+- `get_memo`
+
+MCP client 設定例:
+```json
+{
+  "mcpServers": {
+    "codex-memo": {
+      "command": "npm",
+      "args": ["run", "memo:mcp", "--silent"],
+      "cwd": "/Users/hideki/Documents/develop/codex-tools",
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "/Users/hideki/.config/gcp/codex-tools-firestore-sa.json"
+      }
+    }
+  }
+}
+```
+
+PoC範囲:
+- Firestore `codex-memo` collection の read-only 参照のみ
+- 認証、remote 公開、作成/更新/削除 tool は次段階
+
 ### メモ保存
 ```bash
 npm run memo:thread -- --kind "memo" --body "sample"

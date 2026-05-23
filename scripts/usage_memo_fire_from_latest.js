@@ -634,7 +634,7 @@ function buildUsageOverviewBody({
 
   lines.push(
     "",
-    "<small>refs: [firestore usage](https://console.firebase.google.com/project/hush-pointer/firestore/databases/-default-/usage/prev-24h) | [storage](https://console.firebase.google.com/project/hush-pointer/storage) | [codex usage](https://chatgpt.com/codex/settings/usage) | [openai usage](https://platform.openai.com/usage)</small>"
+    "<small>refs: [firestore usage](https://console.firebase.google.com/project/hush-pointer/firestore/databases/-default-/usage/prev-24h) | [storage](https://console.firebase.google.com/project/hush-pointer/storage) | [codex usage](https://chatgpt.com/codex/settings/usage) | [openai usage](https://platform.openai.com/usage) | [ai studio rate limits](https://aistudio.google.com/rate-limit?timeRange=last-90-days)</small>"
   );
 
   return lines.join("\n");

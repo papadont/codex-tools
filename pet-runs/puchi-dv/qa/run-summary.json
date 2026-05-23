@@ -1,0 +1,8 @@
+{
+  "ok": true,
+  "run_dir": "/Users/hideki/Documents/develop/codex-tools/pet-runs/puchi-dv",
+  "spritesheet": "/Users/hideki/Documents/develop/codex-tools/pet-runs/puchi-dv/final/spritesheet.webp",
+  "contact_sheet": "/Users/hideki/Documents/develop/codex-tools/pet-runs/puchi-dv/qa/contact-sheet.png",
+  "validation": "/Users/hideki/Documents/develop/codex-tools/pet-runs/puchi-dv/final/validation.json",
+  "package": "/Users/hideki/.codex/pets/puchi-dv"
+}

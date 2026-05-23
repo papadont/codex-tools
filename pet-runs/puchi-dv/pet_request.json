@@ -1,0 +1,29 @@
+{
+  "pet_id": "puchi-dv",
+  "display_name": "puchi-dv",
+  "source": "/Users/hideki/Documents/kiro/webp/puchi-dv.png",
+  "cell_size": [
+    192,
+    208
+  ],
+  "atlas_size": [
+    1536,
+    1872
+  ],
+  "frame_size": [
+    140,
+    96
+  ],
+  "states": {
+    "idle": 6,
+    "running-right": 8,
+    "running-left": 8,
+    "waving": 4,
+    "jumping": 5,
+    "failed": 8,
+    "waiting": 6,
+    "running": 6,
+    "review": 6
+  },
+  "notes": "Black frame is treated as the pet body; pale checkerboard inside each frame is normalized to white; outside each frame is transparent. Hand-drawn line tone is preserved."
+}

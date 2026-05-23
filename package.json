@@ -13,6 +13,7 @@
     "memo:web": "node scripts/codex_memo_web_server.js",
     "memo:web:icloud": "node scripts/codex_memo_web_server.js --storage-mode fixed --adapter icloud",
     "memo:web:firebase": "node scripts/codex_memo_web_server.js --storage-mode fixed --adapter firebase",
+    "memo:mcp": "node scripts/codex_memo_mcp_server.mjs",
     "firebase:storage:check": "node scripts/firebase_storage_check.js",
     "memo:pick-handover": "node scripts/pick_handover_memo.js",
     "firestore:usage": "node scripts/firestore_usage_report.js",
@@ -22,7 +23,9 @@
     "usage:memo-trigger:once:install": "scripts/install_usage_memo_once_launchagent.sh"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^4.21.2",
-    "firebase-admin": "^12.7.0"
+    "firebase-admin": "^12.7.0",
+    "zod": "^3.25.76"
   }
 }
