@@ -25,5 +25,5 @@
     "running": 6,
     "review": 6
   },
-  "notes": "Black frame is treated as the pet body; pale checkerboard inside each frame is normalized to white; outside each frame is transparent. Hand-drawn line tone is preserved."
+  "notes": "The old black frame is removed. A white rounded rectangle is treated as the pet body; outside the rounded panel is transparent. Idle reuses the bored waiting row. The fifth row keeps the surprised hover frames in the five contract-valid jumping cells. Hand-drawn expression line tone is preserved."
 }
