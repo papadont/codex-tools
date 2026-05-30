@@ -5,8 +5,20 @@ const path = require("path");
 const { saveMemoRecord } = require("./codex_memo_core");
 const { loadEnvFromCandidates } = require("./load_env");
 
-const LATEST_PATH = path.join(process.cwd(), "dist", "usage-reports", "weekly", "latest.json");
-const STATE_PATH = path.join(process.cwd(), "dist", "usage-reports", "weekly", ".memo-trigger-state.json");
+const LATEST_PATH = path.join(
+  process.cwd(),
+  "dist",
+  "usage-reports",
+  "weekly",
+  "latest.json",
+);
+const STATE_PATH = path.join(
+  process.cwd(),
+  "dist",
+  "usage-reports",
+  "weekly",
+  ".memo-trigger-state.json",
+);
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 
 loadEnvFromCandidates();
@@ -83,7 +95,10 @@ function formatJpy(value, digits = 0) {
 function formatNumberCompact(value) {
   const n = Number(value || 0);
   if (!Number.isFinite(n)) return "-";
-  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(n);
 }
 
 function formatBytes(value) {
@@ -115,25 +130,63 @@ function formatPeakPaceMetric(label, value) {
 
 function getFirestoreTodaySnapshot(firestoreSummary) {
   const todayKey = new Date().toISOString().slice(0, 10);
-  const perDay = Array.isArray(firestoreSummary?.perDay) ? firestoreSummary.perDay : [];
-  const today = perDay.find((d) => d.date === todayKey) || perDay[perDay.length - 1] || { read: 0, write: 0, delete: 0, date: todayKey };
+  const perDay = Array.isArray(firestoreSummary?.perDay)
+    ? firestoreSummary.perDay
+    : [];
+  const today = perDay.find((d) => d.date === todayKey) ||
+    perDay[perDay.length - 1] || {
+      read: 0,
+      write: 0,
+      delete: 0,
+      date: todayKey,
+    };
   const recent = perDay.slice(-14);
-  const recentExcludingToday = recent.filter((d) => String(d?.date || "") !== String(today?.date || ""));
-  const limits = firestoreSummary?.limitsDaily || { read: 50000, write: 20000, delete: 20000 };
+  const recentExcludingToday = recent.filter(
+    (d) => String(d?.date || "") !== String(today?.date || ""),
+  );
+  const limits = firestoreSummary?.limitsDaily || {
+    read: 50000,
+    write: 20000,
+    delete: 20000,
+  };
   const ratePercent = {
-    read: Number(today?.ratePercent?.read ?? ((Number(today.read || 0) / Math.max(1, Number(limits.read || 1))) * 100)),
-    write: Number(today?.ratePercent?.write ?? ((Number(today.write || 0) / Math.max(1, Number(limits.write || 1))) * 100)),
-    delete: Number(today?.ratePercent?.delete ?? ((Number(today.delete || 0) / Math.max(1, Number(limits.delete || 1))) * 100))
+    read: Number(
+      today?.ratePercent?.read ??
+        (Number(today.read || 0) / Math.max(1, Number(limits.read || 1))) * 100,
+    ),
+    write: Number(
+      today?.ratePercent?.write ??
+        (Number(today.write || 0) / Math.max(1, Number(limits.write || 1))) *
+          100,
+    ),
+    delete: Number(
+      today?.ratePercent?.delete ??
+        (Number(today.delete || 0) / Math.max(1, Number(limits.delete || 1))) *
+          100,
+    ),
   };
   const maxInRecent = {
     read: Math.max(1, ...recentExcludingToday.map((d) => Number(d.read || 0))),
-    write: Math.max(1, ...recentExcludingToday.map((d) => Number(d.write || 0))),
-    delete: Math.max(1, ...recentExcludingToday.map((d) => Number(d.delete || 0)))
+    write: Math.max(
+      1,
+      ...recentExcludingToday.map((d) => Number(d.write || 0)),
+    ),
+    delete: Math.max(
+      1,
+      ...recentExcludingToday.map((d) => Number(d.delete || 0)),
+    ),
   };
   const relativePercent = {
-    read: (Number(today.read || 0) / Math.max(1, Number(maxInRecent.read || 1))) * 100,
-    write: (Number(today.write || 0) / Math.max(1, Number(maxInRecent.write || 1))) * 100,
-    delete: (Number(today.delete || 0) / Math.max(1, Number(maxInRecent.delete || 1))) * 100
+    read:
+      (Number(today.read || 0) / Math.max(1, Number(maxInRecent.read || 1))) *
+      100,
+    write:
+      (Number(today.write || 0) / Math.max(1, Number(maxInRecent.write || 1))) *
+      100,
+    delete:
+      (Number(today.delete || 0) /
+        Math.max(1, Number(maxInRecent.delete || 1))) *
+      100,
   };
   return { today, ratePercent, relativePercent };
 }
@@ -156,24 +209,36 @@ function extractOpenAIResponseText(payload) {
 }
 
 function getOpenAIApiKey() {
-  return String(process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || "").trim();
+  return String(
+    process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || "",
+  ).trim();
 }
 
 function computeFirestore14dTrend(firestoreSummary) {
-  const perDay = Array.isArray(firestoreSummary?.perDay) ? firestoreSummary.perDay : [];
+  const perDay = Array.isArray(firestoreSummary?.perDay)
+    ? firestoreSummary.perDay
+    : [];
   const last14 = perDay.slice(-14);
   const first7 = last14.slice(0, 7);
   const last7 = last14.slice(-7);
-  const sum = (rows, key) => rows.reduce((acc, row) => acc + Number(row?.[key] || 0), 0);
+  const sum = (rows, key) =>
+    rows.reduce((acc, row) => acc + Number(row?.[key] || 0), 0);
   const avg = (rows, key) => (rows.length ? sum(rows, key) / rows.length : 0);
   const latest = last14[last14.length - 1] || null;
   const prev = last14[last14.length - 2] || null;
 
   const avgRate = (rows, key) => {
     if (!rows.length) return 0;
-    return rows.reduce((acc, row) => acc + Number(row?.ratePercent?.[key] || 0), 0) / rows.length;
+    return (
+      rows.reduce((acc, row) => acc + Number(row?.ratePercent?.[key] || 0), 0) /
+      rows.length
+    );
   };
-  const maxRate = (rows, key) => rows.reduce((m, row) => Math.max(m, Number(row?.ratePercent?.[key] || 0)), 0);
+  const maxRate = (rows, key) =>
+    rows.reduce(
+      (m, row) => Math.max(m, Number(row?.ratePercent?.[key] || 0)),
+      0,
+    );
   const trend = {};
   for (const key of ["read", "write", "delete"]) {
     const avgFirst7 = avg(first7, key);
@@ -187,11 +252,13 @@ function computeFirestore14dTrend(firestoreSummary) {
       deltaDay: Number(latest?.[key] || 0) - Number(prev?.[key] || 0),
       latestRate: Number(latest?.ratePercent?.[key] || 0),
       prevRate: Number(prev?.ratePercent?.[key] || 0),
-      deltaRateDay: Number(latest?.ratePercent?.[key] || 0) - Number(prev?.ratePercent?.[key] || 0),
+      deltaRateDay:
+        Number(latest?.ratePercent?.[key] || 0) -
+        Number(prev?.ratePercent?.[key] || 0),
       avgRateFirst7: avgRate(first7, key),
       avgRateLast7: avgRate(last7, key),
       deltaAvgRate: avgRate(last7, key) - avgRate(first7, key),
-      maxRate14d: maxRate(last14, key)
+      maxRate14d: maxRate(last14, key),
     };
   }
   return { last14, latest, prev, trend };
@@ -207,21 +274,26 @@ function getStorageSnapshot(storageSummary) {
       Number(percent.storage || 0),
       Number(percent.download || 0),
       Number(percent.classA || 0),
-      Number(percent.classB || 0)
+      Number(percent.classB || 0),
     ),
     bytes: Number(summary?.current?.totalBytes || 0),
     objects: Number(summary?.current?.totalObjects || 0),
     egressBytes30d: Number(summary?.last30d?.egressBytes || 0),
     storageLimitGb: Number(noCost.storageGbMonths || 0),
-    requestCounts: summary?.last30d?.requestCounts || { classA: 0, classB: 0, other: 0, total: 0 },
+    requestCounts: summary?.last30d?.requestCounts || {
+      classA: 0,
+      classB: 0,
+      other: 0,
+      total: 0,
+    },
     estimatedMonthlyUsd: Number(estimate.estimatedMonthlyUsd || 0),
     bucketKind: summary?.bucketKind || "-",
     percentOfNoCost: {
       storage: Number(percent.storage || 0),
       download: Number(percent.download || 0),
       classA: Number(percent.classA || 0),
-      classB: Number(percent.classB || 0)
-    }
+      classB: Number(percent.classB || 0),
+    },
   };
 }
 
@@ -234,9 +306,10 @@ function getOpenAISnapshot(openaiSummary) {
     totalUsd30d: totalUsd,
     latestDayUsd: Number(summary?.latestDayUsd || 0),
     budgetJpy,
-    budgetStateText: budgetJpy > 0
-      ? `${formatUsd(totalUsd, 2)} / ref ¥${budgetJpy.toLocaleString()}`
-      : formatUsd(totalUsd, 2)
+    budgetStateText:
+      budgetJpy > 0
+        ? `${formatUsd(totalUsd, 2)} / ref ¥${budgetJpy.toLocaleString()}`
+        : formatUsd(totalUsd, 2),
   };
 }
 
@@ -249,17 +322,20 @@ function simplifyOpenAILineItemName(name) {
 
 function splitOpenAILineItemName(name) {
   const simplified = simplifyOpenAILineItemName(name);
-  const parts = simplified.split(" / ").map((part) => part.trim()).filter(Boolean);
+  const parts = simplified
+    .split(" / ")
+    .map((part) => part.trim())
+    .filter(Boolean);
   if (parts.length >= 2) {
     const kind = parts.pop();
     return {
       model: parts.join(" / "),
-      kind
+      kind,
     };
   }
   return {
     model: simplified,
-    kind: ""
+    kind: "",
   };
 }
 
@@ -286,11 +362,16 @@ function formatOpenAILineItems14d(lineItems, usdToJpy) {
         .map((entry) => ({
           kind: entry.kind,
           amountUsd: roundUsd(entry.amountUsd, 3),
-          amountJpy: Math.round(roundUsd(entry.amountUsd, 3) * usdToJpy)
+          amountJpy: Math.round(roundUsd(entry.amountUsd, 3) * usdToJpy),
         }))
         .filter((entry) => entry.amountUsd > 0)
-        .sort((a, b) => b.amountUsd - a.amountUsd || a.kind.localeCompare(b.kind));
-      const totalUsd = roundUsd(entries.reduce((sum, entry) => sum + entry.amountUsd, 0), 3);
+        .sort(
+          (a, b) => b.amountUsd - a.amountUsd || a.kind.localeCompare(b.kind),
+        );
+      const totalUsd = roundUsd(
+        entries.reduce((sum, entry) => sum + entry.amountUsd, 0),
+        3,
+      );
       return { model: group.model, totalUsd, entries };
     })
     .filter((item) => item.totalUsd > 0)
@@ -298,7 +379,11 @@ function formatOpenAILineItems14d(lineItems, usdToJpy) {
   return charged.length ? charged : null;
 }
 
-function getRoughMonthlyCostSnapshot({ storageSummary, openaiSummary, usdToJpy = 150 }) {
+function getRoughMonthlyCostSnapshot({
+  storageSummary,
+  openaiSummary,
+  usdToJpy = 150,
+}) {
   const storage = getStorageSnapshot(storageSummary);
   const openai = getOpenAISnapshot(openaiSummary);
   const storageUsd = Number(storage.estimatedMonthlyUsd || 0);
@@ -310,7 +395,7 @@ function getRoughMonthlyCostSnapshot({ storageSummary, openaiSummary, usdToJpy =
     totalJpy: (storageUsd + openaiUsd) * usdToJpy,
     storageJpy: storageUsd * usdToJpy,
     openaiJpy: openaiUsd * usdToJpy,
-    usdToJpy
+    usdToJpy,
   };
 }
 
@@ -324,7 +409,7 @@ function getMonthPaceInfo(baseDate = new Date()) {
     dayOfMonth: day,
     daysInMonth,
     elapsedRatio: day / Math.max(1, daysInMonth),
-    remainingDays: Math.max(0, daysInMonth - day)
+    remainingDays: Math.max(0, daysInMonth - day),
   };
 }
 
@@ -336,15 +421,22 @@ function buildCodexWeeklyTimingContext(codexSummary) {
   const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const fetchedMs = fetched.getTime();
   const resetMs = reset.getTime();
-  const diffMs = Number.isFinite(fetchedMs) && Number.isFinite(resetMs) ? Math.max(0, resetMs - fetchedMs) : NaN;
+  const diffMs =
+    Number.isFinite(fetchedMs) && Number.isFinite(resetMs)
+      ? Math.max(0, resetMs - fetchedMs)
+      : NaN;
   const hours = Number.isFinite(diffMs) ? diffMs / (1000 * 60 * 60) : null;
   const days = Number.isFinite(diffMs) ? diffMs / (1000 * 60 * 60 * 24) : null;
   return {
     fetchedAtISO,
-    currentWeekdayLocal: Number.isFinite(fetchedMs) ? weekdayNames[fetched.getDay()] : null,
+    currentWeekdayLocal: Number.isFinite(fetchedMs)
+      ? weekdayNames[fetched.getDay()]
+      : null,
     weeklyResetAtISO: resetAtISO || null,
-    daysUntilWeeklyReset: Number.isFinite(days) ? Number(days.toFixed(2)) : null,
-    hoursUntilWeeklyReset: Number.isFinite(hours) ? Math.round(hours) : null
+    daysUntilWeeklyReset: Number.isFinite(days)
+      ? Number(days.toFixed(2))
+      : null,
+    hoursUntilWeeklyReset: Number.isFinite(hours) ? Math.round(hours) : null,
   };
 }
 
@@ -353,14 +445,18 @@ function buildUsageOverviewFallbackSummary({
   codexSummary,
   storageSummary,
   openaiSummary,
-  roughCostSummary
+  roughCostSummary,
 }) {
   const fsToday = getFirestoreTodaySnapshot(firestoreSummary);
   const codexSecondary = codexSummary?.secondaryWindow || null;
   const codexWeeklyTiming = buildCodexWeeklyTimingContext(codexSummary);
   const now = new Date();
   const dayOfMonth = now.getDate();
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const daysInMonth = new Date(
+    now.getFullYear(),
+    now.getMonth() + 1,
+    0,
+  ).getDate();
   const elapsedMonthRatio = dayOfMonth / Math.max(1, daysInMonth);
   const openaiTotalJpy = Number(roughCostSummary?.openaiJpy || 0);
   const openaiMonthEndJpy = openaiSummary?.available
@@ -371,12 +467,12 @@ function buildUsageOverviewFallbackSummary({
     Number(storagePercent.storage || 0),
     Number(storagePercent.download || 0),
     Number(storagePercent.classA || 0),
-    Number(storagePercent.classB || 0)
+    Number(storagePercent.classB || 0),
   );
   const firestorePeak = Math.max(
     Number(fsToday?.ratePercent?.read || 0),
     Number(fsToday?.ratePercent?.write || 0),
-    Number(fsToday?.ratePercent?.delete || 0)
+    Number(fsToday?.ratePercent?.delete || 0),
   );
 
   return [
@@ -386,7 +482,7 @@ function buildUsageOverviewFallbackSummary({
       ? `openai: 月末見込み ¥${Math.round(openaiMonthEndJpy)}、現時点 ¥${Math.round(openaiTotalJpy)} (${dayOfMonth}/${daysInMonth})`
       : "openai: 利用額未取得",
     `storage: 無料枠ペース最大 ${storagePeak.toFixed(1)}% で ${storagePeak < 100 ? "枠内ペース" : "超過注意"}`,
-    `firestore: 無料枠ペース最大 ${firestorePeak.toFixed(1)}% で ${firestorePeak < 100 ? "枠内ペース" : "超過注意"}`
+    `firestore: 無料枠ペース最大 ${firestorePeak.toFixed(1)}% で ${firestorePeak < 100 ? "枠内ペース" : "超過注意"}`,
   ].join("\n");
 }
 
@@ -397,7 +493,11 @@ function normalizeUsageOverviewSummary(summary, fallbackSummary) {
 }
 
 function shouldUseAiUsageOverviewSummary() {
-  return String(process.env.USAGE_OVERVIEW_SUMMARY_MODE || "").trim().toLowerCase() === "ai";
+  return (
+    String(process.env.USAGE_OVERVIEW_SUMMARY_MODE || "")
+      .trim()
+      .toLowerCase() === "ai"
+  );
 }
 
 function getUsageOverviewSummaryModel() {
@@ -410,14 +510,14 @@ async function summarizeUsageOverviewWithOpenAI({
   codexSummary,
   storageSummary,
   openaiSummary,
-  roughCostSummary
+  roughCostSummary,
 }) {
   const fallbackSummary = buildUsageOverviewFallbackSummary({
     firestoreSummary,
     codexSummary,
     storageSummary,
     openaiSummary,
-    roughCostSummary
+    roughCostSummary,
   });
   if (!shouldUseAiUsageOverviewSummary()) return fallbackSummary;
 
@@ -431,9 +531,15 @@ async function summarizeUsageOverviewWithOpenAI({
   const limits = firestoreSummary?.limitsDaily || {};
   const now = new Date();
   const dayOfMonth = now.getDate();
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const daysInMonth = new Date(
+    now.getFullYear(),
+    now.getMonth() + 1,
+    0,
+  ).getDate();
   const elapsedMonthRatio = dayOfMonth / Math.max(1, daysInMonth);
-  const openaiTotalUsd30d = Number(openaiSummary?.available ? openaiSummary?.totalUsd30d || 0 : 0);
+  const openaiTotalUsd30d = Number(
+    openaiSummary?.available ? openaiSummary?.totalUsd30d || 0 : 0,
+  );
   const storagePercent = storageSummary?.estimate?.percentOfNoCost || {};
 
   const input = [
@@ -442,95 +548,120 @@ async function summarizeUsageOverviewWithOpenAI({
       content: [
         {
           type: "input_text",
-          text: "You are a cloud service usage analyst. Analyze the usage data and output a concise Japanese paragraph (300-400 chars). Cover key metrics, cost anomalies, and optimization actions. No bullet points, no intro, no conclusion. 重要事項:codexは1週間周期のリセットを常に意識する。Openaiのusageは再重要事項。課金発生要因について必ず言及すること。"
-        }
-      ]
+          text: "You are a cloud service usage analyst. Analyze the usage data and output a concise Japanese paragraph (300-400 chars). Cover key metrics, cost anomalies, and optimization actions. No bullet points, no intro, no conclusion. 重要事項:codexは1週間周期のリセットを常に意識する。Openaiのusageは再重要事項。課金発生要因について必ず言及すること。",
+        },
+      ],
     },
     {
       role: "user",
       content: [
         {
           type: "input_text",
-          text: JSON.stringify({
-            totalCost: {
-              roughTotalJpy: Number(Number(roughCostSummary?.totalJpy || 0).toFixed(0)),
-              storageJpy: Number(Number(roughCostSummary?.storageJpy || 0).toFixed(0)),
-              openaiJpy: Number(Number(roughCostSummary?.openaiJpy || 0).toFixed(0)),
-              redlineJpy: 3000
-            },
-            codex: {
-              planType: codexSummary?.planType || null,
-              usedPercent: Number(codexSecondary?.usedPercent ?? 0),
-              remainingPercent: Number(codexSecondary?.remainingPercent ?? 0),
-              hoursUntilReset: codexWeeklyTiming?.hoursUntilWeeklyReset ?? null,
-              resetAtISO: codexSecondary?.resetAtISO || null
-            },
-            openai: {
-              available: Boolean(openaiSummary?.available),
-              dayOfMonth,
-              daysInMonth,
-              monthToDateJpy: Number(Number(roughCostSummary?.openaiJpy || 0).toFixed(0)),
-              last14dUsd: Number(Number(openaiSummary?.totalUsd14d || 0).toFixed(3)),
-              billedLineItems14d: Array.isArray(openaiSummary?.lineItems14d)
-                ? openaiSummary.lineItems14d.map((item) => ({
-                  name: item.name,
-                  amountUsd: Number(Number(item.amountUsd || 0).toFixed(3))
-                }))
-                : [],
-              projectedMonthEndJpy: openaiSummary?.available
-                ? Number((openaiTotalUsd30d / Math.max(0.001, elapsedMonthRatio)).toFixed(0))
-                : null
-            },
-            storage: {
-              peakNoCostPercent: Math.max(
-                Number(storagePercent.storage || 0),
-                Number(storagePercent.download || 0),
-                Number(storagePercent.classA || 0),
-                Number(storagePercent.classB || 0)
-              ),
-              roughMonthlyOverageUsd: Number(storageSummary?.estimate?.estimatedMonthlyUsd || 0)
-            },
-            firestore: {
-              limitsDaily: {
-                read: Number(limits.read || 0),
-                write: Number(limits.write || 0),
-                delete: Number(limits.delete || 0)
+          text: JSON.stringify(
+            {
+              totalCost: {
+                roughTotalJpy: Number(
+                  Number(roughCostSummary?.totalJpy || 0).toFixed(0),
+                ),
+                storageJpy: Number(
+                  Number(roughCostSummary?.storageJpy || 0).toFixed(0),
+                ),
+                openaiJpy: Number(
+                  Number(roughCostSummary?.openaiJpy || 0).toFixed(0),
+                ),
+                redlineJpy: 3000,
               },
-              todayRatePercent: fsToday.ratePercent,
-              trend7d: {
-                read: Number(fsTrend.trend.read.avgRateLast7.toFixed(2)),
-                write: Number(fsTrend.trend.write.avgRateLast7.toFixed(2)),
-                delete: Number(fsTrend.trend.delete.avgRateLast7.toFixed(2))
+              codex: {
+                planType: codexSummary?.planType || null,
+                usedPercent: Number(codexSecondary?.usedPercent ?? 0),
+                remainingPercent: Number(codexSecondary?.remainingPercent ?? 0),
+                hoursUntilReset:
+                  codexWeeklyTiming?.hoursUntilWeeklyReset ?? null,
+                resetAtISO: codexSecondary?.resetAtISO || null,
               },
-              max14d: {
-                read: Number(fsTrend.trend.read.maxRate14d.toFixed(2)),
-                write: Number(fsTrend.trend.write.maxRate14d.toFixed(2)),
-                delete: Number(fsTrend.trend.delete.maxRate14d.toFixed(2))
-              }
-            }
-          }, null, 0)
-        }
-      ]
-    }
+              openai: {
+                available: Boolean(openaiSummary?.available),
+                dayOfMonth,
+                daysInMonth,
+                monthToDateJpy: Number(
+                  Number(roughCostSummary?.openaiJpy || 0).toFixed(0),
+                ),
+                last14dUsd: Number(
+                  Number(openaiSummary?.totalUsd14d || 0).toFixed(3),
+                ),
+                billedLineItems14d: Array.isArray(openaiSummary?.lineItems14d)
+                  ? openaiSummary.lineItems14d.map((item) => ({
+                      name: item.name,
+                      amountUsd: Number(Number(item.amountUsd || 0).toFixed(3)),
+                    }))
+                  : [],
+                projectedMonthEndJpy: openaiSummary?.available
+                  ? Number(
+                      (
+                        openaiTotalUsd30d / Math.max(0.001, elapsedMonthRatio)
+                      ).toFixed(0),
+                    )
+                  : null,
+              },
+              storage: {
+                peakNoCostPercent: Math.max(
+                  Number(storagePercent.storage || 0),
+                  Number(storagePercent.download || 0),
+                  Number(storagePercent.classA || 0),
+                  Number(storagePercent.classB || 0),
+                ),
+                roughMonthlyOverageUsd: Number(
+                  storageSummary?.estimate?.estimatedMonthlyUsd || 0,
+                ),
+              },
+              firestore: {
+                limitsDaily: {
+                  read: Number(limits.read || 0),
+                  write: Number(limits.write || 0),
+                  delete: Number(limits.delete || 0),
+                },
+                todayRatePercent: fsToday.ratePercent,
+                trend7d: {
+                  read: Number(fsTrend.trend.read.avgRateLast7.toFixed(2)),
+                  write: Number(fsTrend.trend.write.avgRateLast7.toFixed(2)),
+                  delete: Number(fsTrend.trend.delete.avgRateLast7.toFixed(2)),
+                },
+                max14d: {
+                  read: Number(fsTrend.trend.read.maxRate14d.toFixed(2)),
+                  write: Number(fsTrend.trend.write.maxRate14d.toFixed(2)),
+                  delete: Number(fsTrend.trend.delete.maxRate14d.toFixed(2)),
+                },
+              },
+            },
+            null,
+            0,
+          ),
+        },
+      ],
+    },
   ];
 
   const res = await fetch(OPENAI_RESPONSES_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model: getUsageOverviewSummaryModel(),
       input,
-      max_output_tokens: 260
-    })
+      max_output_tokens: 260,
+    }),
   });
 
   const payload = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(payload?.error?.message || `OpenAI API error (${res.status})`);
+  if (!res.ok)
+    throw new Error(
+      payload?.error?.message || `OpenAI API error (${res.status})`,
+    );
   const summary = extractOpenAIResponseText(payload);
-  if (!summary) throw new Error("OpenAI response did not contain summary text.");
+  if (!summary)
+    throw new Error("OpenAI response did not contain summary text.");
   return normalizeUsageOverviewSummary(summary, fallbackSummary);
 }
 
@@ -548,25 +679,33 @@ function buildUsageOverviewBody({
   codexSummary,
   storageSummary,
   openaiSummary,
-  usageOverviewSummary
+  usageOverviewSummary,
 }) {
   const fs = getFirestoreTodaySnapshot(firestoreSummary);
   const storage = getStorageSnapshot(storageSummary);
   const openai = getOpenAISnapshot(openaiSummary);
-  const roughCost = getRoughMonthlyCostSnapshot({ storageSummary, openaiSummary });
+  const roughCost = getRoughMonthlyCostSnapshot({
+    storageSummary,
+    openaiSummary,
+  });
   const codexPrimary = codexSummary?.primaryWindow || null;
   const codexSecondary = codexSummary?.secondaryWindow || null;
   const monthPace = getMonthPaceInfo();
   const openaiRecentUsd = Number(openaiSummary?.totalUsd14d || 0);
   const openaiRecentJpy = openaiRecentUsd * roughCost.usdToJpy;
-  const openaiLineItems14d = formatOpenAILineItems14d(openaiSummary?.lineItems14d, roughCost.usdToJpy);
-  const fsPerDay = Array.isArray(firestoreSummary?.perDay) ? firestoreSummary.perDay : [];
+  const openaiLineItems14d = formatOpenAILineItems14d(
+    openaiSummary?.lineItems14d,
+    roughCost.usdToJpy,
+  );
+  const fsPerDay = Array.isArray(firestoreSummary?.perDay)
+    ? firestoreSummary.perDay
+    : [];
   const fs14Desc = [...fsPerDay]
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
     .slice(0, 14);
 
   const lines = [
-    `rough monthly cost: **${formatJpy(roughCost.totalJpy, 0)}** / line ¥3000 (Storage ${formatJpy(roughCost.storageJpy, 0)} + OpenAI ${formatJpy(roughCost.openaiJpy, 0)})`
+    `rough monthly cost: **${formatJpy(roughCost.totalJpy, 0)}** / line ¥3000 (Storage ${formatJpy(roughCost.storageJpy, 0)} + OpenAI ${formatJpy(roughCost.openaiJpy, 0)})`,
   ];
   if (usageOverviewSummary) {
     lines.push("");
@@ -603,7 +742,7 @@ function buildUsageOverviewBody({
     "### OpenAI 14d line items",
     "",
     "| model | input | output | total |",
-    "| --- | ---: | ---: | ---: |"
+    "| --- | ---: | ---: | ---: |",
   );
 
   if (openaiLineItems14d && openaiLineItems14d.length) {
@@ -614,7 +753,9 @@ function buildUsageOverviewBody({
       const outputUsd = item.entries
         .filter((entry) => entry.kind === "output")
         .reduce((sum, entry) => sum + entry.amountUsd, 0);
-      lines.push(`| ${item.model} | ${formatUsd(inputUsd, 3)} | ${formatUsd(outputUsd, 3)} | ${formatUsd(item.totalUsd, 3)} (${formatJpy(Math.round(item.totalUsd * roughCost.usdToJpy), 0)}) |`);
+      lines.push(
+        `| ${item.model} | ${formatUsd(inputUsd, 3)} | ${formatUsd(outputUsd, 3)} | ${formatUsd(item.totalUsd, 3)} (${formatJpy(Math.round(item.totalUsd * roughCost.usdToJpy), 0)}) |`,
+      );
     }
   } else {
     lines.push("| - | - | - | - |");
@@ -625,16 +766,18 @@ function buildUsageOverviewBody({
     "### Firestore 14d details",
     "",
     "| date (UTC) | read | write | delete | total |",
-    "| --- | ---: | ---: | ---: | ---: |"
+    "| --- | ---: | ---: | ---: | ---: |",
   );
 
   for (const day of fs14Desc) {
-    lines.push(`| ${day.date || "-"} | ${day.read || 0} | ${day.write || 0} | ${day.delete || 0} | ${day.total || 0} |`);
+    lines.push(
+      `| ${day.date || "-"} | ${day.read || 0} | ${day.write || 0} | ${day.delete || 0} | ${day.total || 0} |`,
+    );
   }
 
   lines.push(
     "",
-    "<small>refs: [firestore usage](https://console.firebase.google.com/project/hush-pointer/firestore/databases/-default-/usage/prev-24h) | [storage](https://console.firebase.google.com/project/hush-pointer/storage) | [codex usage](https://chatgpt.com/codex/settings/usage) | [openai usage](https://platform.openai.com/usage) | [ai studio rate limits](https://aistudio.google.com/rate-limit?timeRange=last-90-days)</small>"
+    "<small>refs: [firestore usage](https://console.firebase.google.com/project/hush-pointer/firestore/databases/-default-/usage/prev-24h) | [storage](https://console.firebase.google.com/project/hush-pointer/storage) | [codex usage](https://chatgpt.com/codex/settings/usage) | [openai usage](https://platform.openai.com/usage) | [ai studio rate limits](https://aistudio.google.com/rate-limit?timeRange=last-1-days)</small>",
   );
 
   return lines.join("\n");
@@ -647,8 +790,16 @@ async function main() {
   const storageSummary = latest?.storageUsage || null;
   const openaiSummary = latest?.openaiCosts || null;
   const resetAtISO = codexSummary?.secondaryWindow?.resetAtISO || "";
-  if (!firestoreSummary || !codexSummary || !storageSummary || !openaiSummary || !resetAtISO) {
-    throw new Error("latest.json does not contain required usage tile payload.");
+  if (
+    !firestoreSummary ||
+    !codexSummary ||
+    !storageSummary ||
+    !openaiSummary ||
+    !resetAtISO
+  ) {
+    throw new Error(
+      "latest.json does not contain required usage tile payload.",
+    );
   }
 
   const state = loadState();
@@ -658,13 +809,16 @@ async function main() {
   }
 
   const savedAtISO = new Date().toISOString();
-  const roughCostSummary = getRoughMonthlyCostSnapshot({ storageSummary, openaiSummary });
+  const roughCostSummary = getRoughMonthlyCostSnapshot({
+    storageSummary,
+    openaiSummary,
+  });
   let usageOverviewSummary = buildUsageOverviewFallbackSummary({
     firestoreSummary,
     codexSummary,
     storageSummary,
     openaiSummary,
-    roughCostSummary
+    roughCostSummary,
   });
   try {
     usageOverviewSummary = await summarizeUsageOverviewWithOpenAI({
@@ -672,17 +826,19 @@ async function main() {
       codexSummary,
       storageSummary,
       openaiSummary,
-      roughCostSummary
+      roughCostSummary,
     });
   } catch (error) {
-    console.warn(`[usage-summary] OpenAI summarize skipped: ${error?.message || String(error)}`);
+    console.warn(
+      `[usage-summary] OpenAI summarize skipped: ${error?.message || String(error)}`,
+    );
   }
   const memoBody = buildUsageOverviewBody({
     firestoreSummary,
     codexSummary,
     storageSummary,
     openaiSummary,
-    usageOverviewSummary
+    usageOverviewSummary,
   });
   const result = await saveMemoRecord({
     projectName: "usage",
@@ -691,14 +847,14 @@ async function main() {
     threadTitle: `Firebase/Codex Usage - ${formatTitleDate(savedAtISO)}`,
     deletable: false,
     createdBy: "codex-tools-usage-trigger",
-    sourceThread: process.cwd()
+    sourceThread: process.cwd(),
   });
 
   saveState({
     ...state,
     lastTriggeredResetAtISO: resetAtISO,
     lastTriggeredAtISO: savedAtISO,
-    lastDocId: result.docId
+    lastDocId: result.docId,
   });
 
   console.log(`Created memo docId=${result.docId} resetAt=${resetAtISO}`);
