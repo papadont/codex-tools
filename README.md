@@ -14,6 +14,10 @@ Codex周辺ツールをまとめる保守用リポジトリ。
   - macOS Share Extension の土台
   - `text` / `url` を `codex-memo` の `/api/memos` へ送る
 
+## 分離済みプロジェクト
+- Codex pet の制作・改造・検証は `../codex-pets-lab` に移管済み。
+- この repo では `pet-runs/` を管理しない。
+
 ## ディレクトリ構成（要点）
 ```text
 apps/

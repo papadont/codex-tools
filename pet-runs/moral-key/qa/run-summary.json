@@ -1,9 +1,0 @@
-{
-  "ok": true,
-  "run_dir": "/Users/hideki/Documents/develop/codex-tools/pet-runs/moral-key",
-  "spritesheet": "/Users/hideki/Documents/develop/codex-tools/pet-runs/moral-key/final/spritesheet.webp",
-  "validation": "/Users/hideki/Documents/develop/codex-tools/pet-runs/moral-key/final/validation.json",
-  "contact_sheet": "/Users/hideki/Documents/develop/codex-tools/pet-runs/moral-key/qa/contact-sheet.png",
-  "review": "/Users/hideki/Documents/develop/codex-tools/pet-runs/moral-key/qa/review.json",
-  "package": "/Users/hideki/.codex/pets/moral-key"
-}
