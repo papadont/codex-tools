@@ -144,9 +144,10 @@ MCP client 設定例:
 
 stdio版は Firestore `codex-memo` collection の read-only 参照のみ。
 
-#### Perplexity Web向け Remote MCP
+#### Remote MCP（Perplexity / ChatGPT）
 
-Remote版はAPIキー認証付きStreamable HTTPで、以下を公開する。
+Remote版はStreamable HTTPで、Perplexity向け固定APIキー認証とChatGPT向けOAuth認証を
+併用できる。以下を公開する。
 
 - `list_recent_memos`
 - `search_memos`（直近最大500件のみ）
@@ -167,6 +168,27 @@ npm run memo:mcp:remote
 - `Origin`がある場合は`CODEX_MEMO_ALLOWED_ORIGINS`との完全一致が必要
 - `Origin`なしのサーバー間通信は、有効なBearer APIキーがあれば許可
 - 添付は安全なメタデータのみ返し、署名URL・実ファイル・`storagePath`は公開しない
+
+ChatGPTから接続する場合は、OAuth 2.1対応の認可サーバーを用意し、Remote MCPを
+resource serverとして設定する。固定APIキー経路はそのままPerplexity用に残る。
+
+```bash
+CODEX_MEMO_REMOTE_API_KEY="perplexity-api-key" \
+CODEX_MEMO_PUBLIC_BASE_URL="https://memo.example.com" \
+CODEX_MEMO_OAUTH_ISSUER="https://auth.example.com/" \
+CODEX_MEMO_OAUTH_JWKS_URL="https://auth.example.com/.well-known/jwks.json" \
+CODEX_MEMO_OAUTH_REQUIRED_SCOPES="codex-memo" \
+CODEX_MEMO_OAUTH_AUDIENCE="https://memo.example.com/mcp" \
+npm run memo:mcp:remote
+```
+
+- Protected Resource Metadata:
+  `https://memo.example.com/.well-known/oauth-protected-resource/mcp`
+- 認可サーバーはissuer配下のOAuth Authorization Server Metadataを公開する
+- Auth0などJWT access tokenを発行する認可サーバーではJWKS URLを設定する
+- opaque access tokenの場合はintrospection URLとresource server用client credentialsを設定する
+- `CODEX_MEMO_OAUTH_AUDIENCE`を設定した場合、`aud`または`resource`の一致も必須
+- OAuth経由でproject未指定のメモを作ると`projectName`は`chatgpt`になる
 
 Cloud Runへ手動デプロイする例:
 
@@ -233,6 +255,11 @@ curl "$SERVICE_URL/health"
 PerplexityのCustom Remote Connectorには`$SERVICE_URL/mcp`を登録し、認証方式はAPI Keyを選ぶ。
 実接続で送信される`Origin`が異なる場合は、確認した値だけを
 `CODEX_MEMO_ALLOWED_ORIGINS`へ追加する。
+
+ChatGPTではSettings → Apps → Advanced settingsでDeveloper modeを有効化し、
+Create appから`$SERVICE_URL/mcp`を登録して認証方式にOAuthを選ぶ。認可サーバー側には
+ChatGPT用OAuth clientを登録し、scope `codex-memo`とresource `$SERVICE_URL/mcp`を許可する。
+Cloud Runでは`CODEX_MEMO_OAUTH_CLIENT_SECRET`もSecret Managerから渡す。
 
 コスト事故防止として、月額500円の予算アラートとArtifact Registryの古いイメージ削除ルールを
 Google Cloud Consoleで設定する。初回接続が60秒以内に成立しない場合だけ

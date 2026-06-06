@@ -131,6 +131,11 @@ function errorResult(text, item = { item: null }) {
 
 export function registerMemoTools(server, memoService, options = {}) {
   const writeEnabled = Boolean(options.writeEnabled);
+  const createDefaults = {
+    projectName: compactText(options.createDefaults?.projectName) || "perplexity",
+    createdBy: compactText(options.createDefaults?.createdBy) || "perplexity-remote-mcp",
+    sourceThread: compactText(options.createDefaults?.sourceThread) || "perplexity-remote-mcp"
+  };
 
   server.tool(
     "list_recent_memos",
@@ -197,12 +202,12 @@ export function registerMemoTools(server, memoService, options = {}) {
       const created = await memoService.createMemo({
         memoBody,
         threadTitle: compactText(threadTitle) || defaultTitle(memoBody),
-        projectName: compactText(projectName) || "perplexity",
+        projectName: compactText(projectName) || createDefaults.projectName,
         memoType: compactText(memoType) || "memo",
         storageKind: "firebase",
         attachments: [],
-        createdBy: "perplexity-remote-mcp",
-        sourceThread: "perplexity-remote-mcp",
+        createdBy: createDefaults.createdBy,
+        sourceThread: createDefaults.sourceThread,
         pinned: false,
         deletable: false
       });
