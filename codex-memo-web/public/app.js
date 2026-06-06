@@ -329,6 +329,8 @@ let usageRefreshInFlight = null;
 let usageOverviewSummaryInFlight = null;
 let attachmentLightbox = null;
 let statusBannerTimer = null;
+let mermaidInitialized = false;
+let mermaidRenderSeq = 0;
 
 function usageSourceFooterLines() {
   return [
@@ -358,6 +360,9 @@ const el = {
   memoTypeInput: document.getElementById("memoTypeInput"),
   threadTitleInput: document.getElementById("threadTitleInput"),
   editorDivider: document.getElementById("editorDivider"),
+  docIdRow: document.getElementById("docIdRow"),
+  docIdText: document.getElementById("docIdText"),
+  copyDocIdBtn: document.getElementById("copyDocIdBtn"),
   addImageBtn: document.getElementById("addImageBtn"),
   attachmentInput: document.getElementById("attachmentInput"),
   attachmentList: document.getElementById("attachmentList"),
@@ -1844,6 +1849,12 @@ function quoteMarkdownLines(text) {
     .map((line) => `> ${line}`);
 }
 
+function quoteUsageOverviewSummaryModelLine(modelName) {
+  const model = String(modelName || "").trim();
+  if (!model) return [];
+  return [`> model: \`${model.replace(/`/g, "'")}\``];
+}
+
 function getUsageOverviewSummaryKey() {
   if (!state.usageSummary || !state.codexUsageSummary) return "";
   const fsPerDay = Array.isArray(state.usageSummary.perDay)
@@ -2288,6 +2299,11 @@ function buildUsageOverviewBody() {
   if (state.usageOverviewAiSummary) {
     lines.push("");
     lines.push(...quoteMarkdownLines(state.usageOverviewAiSummary));
+    lines.push(
+      ...quoteUsageOverviewSummaryModelLine(
+        state.usageOverviewAiSummaryModel,
+      ),
+    );
   }
   lines.push(
     "",
@@ -3178,6 +3194,72 @@ function applyMarkdownTableAlignments(root) {
   });
 }
 
+function initializeMermaidRenderer() {
+  if (mermaidInitialized) return true;
+  const mermaid = window.mermaid;
+  if (!mermaid || typeof mermaid.initialize !== "function") return false;
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: "strict",
+    theme: "base",
+    themeVariables: {
+      background: "#fefdfb",
+      primaryColor: "#ffffff",
+      primaryTextColor: "#4b5568",
+      primaryBorderColor: "#c9ced7",
+      lineColor: "#6e7d99",
+      secondaryColor: "#ffffff",
+      tertiaryColor: "#ffffff",
+    },
+  });
+  mermaidInitialized = true;
+  return true;
+}
+
+function prepareMermaidBlocks(root) {
+  if (!root) return [];
+  const blocks = [];
+  root
+    .querySelectorAll("pre > code.language-mermaid, pre > code.lang-mermaid")
+    .forEach((code) => {
+      const pre = code.parentElement;
+      if (!pre || pre.dataset.mermaidPrepared === "true") return;
+      const diagram = document.createElement("div");
+      diagram.className = "mermaid";
+      diagram.textContent = String(code.textContent || "").trim();
+      pre.dataset.mermaidPrepared = "true";
+      pre.replaceWith(diagram);
+    });
+  root.querySelectorAll(".mermaid").forEach((node) => {
+    if (node.dataset.processed !== "true") blocks.push(node);
+  });
+  return blocks;
+}
+
+function renderMermaidBlocks(root) {
+  const blocks = prepareMermaidBlocks(root);
+  if (!blocks.length || !initializeMermaidRenderer()) return;
+  const mermaid = window.mermaid;
+  const renderSeq = ++mermaidRenderSeq;
+  const markError = (error) => {
+    if (renderSeq !== mermaidRenderSeq && root === el.memoPreview) return;
+    blocks.forEach((block) => {
+      if (!block.isConnected || block.dataset.processed === "true") return;
+      block.classList.add("mermaid-error");
+      block.textContent = `Mermaid render error: ${error?.message || error}`;
+    });
+  };
+  try {
+    if (typeof mermaid.run === "function") {
+      Promise.resolve(mermaid.run({ nodes: blocks })).catch(markError);
+    } else if (typeof mermaid.init === "function") {
+      mermaid.init(undefined, blocks);
+    }
+  } catch (error) {
+    markError(error);
+  }
+}
+
 function applyMarkdownPreviewPresentation(root) {
   if (!root) return;
   applyAttachmentPreviewLinks(root);
@@ -3194,6 +3276,7 @@ function applyMarkdownPreviewPresentation(root) {
     window.CodexMemoMarkdownTheme.apply(root);
   }
   applyMarkdownTableAlignments(root);
+  renderMermaidBlocks(root);
 }
 
 function createRenderedMarkdownRoot(source) {
@@ -3257,6 +3340,17 @@ function renderMarkdownPreview() {
   const source = el.memoBodyInput.value || "";
   el.memoPreview.innerHTML = markdownToHtml(source);
   applyMarkdownPreviewPresentation(el.memoPreview);
+}
+
+function renderEditorDocId(item) {
+  const id = String(item?.id || "").trim();
+  if (!el.docIdRow || !el.docIdText || !el.copyDocIdBtn) return;
+  el.docIdRow.classList.toggle("hidden", !id);
+  el.docIdRow.classList.toggle("flex", Boolean(id));
+  el.docIdText.textContent = id;
+  el.copyDocIdBtn.dataset.docId = id;
+  el.copyDocIdBtn.disabled = !id;
+  el.copyDocIdBtn.title = id ? `Copy document id: ${id}` : "No document id";
 }
 
 function getBodyMode() {
@@ -4640,6 +4734,7 @@ function fillEditor(item, options = {}) {
   );
   renderAttachmentList();
   renderStorageInfo(state.selectedId ? normalizedItem : null);
+  renderEditorDocId(normalizedItem);
   renderEditorDividerAccent(isReadOnlyPanel ? "" : currentEditingStorageKind());
   renderSummaryButtonTooltip();
   if (el.dateText) {
@@ -5440,14 +5535,54 @@ async function summarizeMemoAtPointer(ev) {
 
 async function copyBodyText() {
   try {
-    await navigator.clipboard.writeText(el.memoBodyInput.value || "");
+    await copyTextToClipboard(el.memoBodyInput.value || "");
     setStatus("Copied body text");
   } catch (error) {
     setStatus(`Copy error: ${error.message}`, true);
   }
 }
 
+async function copyTextToClipboard(text) {
+  const value = String(text || "");
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch (error) {
+      if (!document.queryCommandSupported?.("copy")) throw error;
+    }
+  }
+  const active = document.activeElement;
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (active && typeof active.focus === "function") active.focus();
+  if (!copied) throw new Error("Clipboard copy was blocked");
+}
+
+async function copySelectedDocId() {
+  const docId = String(el.copyDocIdBtn?.dataset?.docId || "").trim();
+  if (!docId) return;
+  try {
+    await copyTextToClipboard(docId);
+    setStatus(`Copied doc id: ${docId}`);
+  } catch (error) {
+    setStatus(`Copy error: ${error.message}`, true);
+  }
+}
+
 function initEvents() {
+  window.addEventListener("codex-memo:mermaid-ready", () => {
+    if (getBodyMode() === "preview") renderMarkdownPreview();
+  });
   if (el.memoSidebar) {
     el.memoSidebar.addEventListener("scroll", syncStickySlotDivider, {
       passive: true,
@@ -5837,6 +5972,7 @@ function initEvents() {
     downloadMemo(el.downloadFormatSelect.value || "txt"),
   );
   el.copyBodyBtn.addEventListener("click", copyBodyText);
+  el.copyDocIdBtn.addEventListener("click", copySelectedDocId);
   el.shareBtn.addEventListener("click", shareMemo);
   el.summaryBtn.addEventListener("click", summarizeMemoAtPointer);
 }

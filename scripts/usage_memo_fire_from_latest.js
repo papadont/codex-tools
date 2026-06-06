@@ -505,6 +505,12 @@ function getUsageOverviewSummaryModel() {
   return value || "gpt-4o-mini";
 }
 
+function getUsageOverviewSummaryModelLabel() {
+  if (!shouldUseAiUsageOverviewSummary()) return "local-template(mode!=ai)";
+  if (!getOpenAIApiKey()) return "local-template(no-openai-key)";
+  return getUsageOverviewSummaryModel();
+}
+
 async function summarizeUsageOverviewWithOpenAI({
   firestoreSummary,
   codexSummary,
@@ -674,12 +680,19 @@ function quoteMarkdown(text) {
     .map((line) => `> ${line}`);
 }
 
+function quoteUsageOverviewSummaryModelLine(modelName) {
+  const model = String(modelName || "").trim();
+  if (!model) return [];
+  return [`> model: \`${model.replace(/`/g, "'")}\``];
+}
+
 function buildUsageOverviewBody({
   firestoreSummary,
   codexSummary,
   storageSummary,
   openaiSummary,
   usageOverviewSummary,
+  usageOverviewSummaryModel,
 }) {
   const fs = getFirestoreTodaySnapshot(firestoreSummary);
   const storage = getStorageSnapshot(storageSummary);
@@ -710,6 +723,9 @@ function buildUsageOverviewBody({
   if (usageOverviewSummary) {
     lines.push("");
     lines.push(...quoteMarkdown(usageOverviewSummary));
+    lines.push(
+      ...quoteUsageOverviewSummaryModelLine(usageOverviewSummaryModel),
+    );
   }
   lines.push(
     "",
@@ -820,6 +836,7 @@ async function main() {
     openaiSummary,
     roughCostSummary,
   });
+  let usageOverviewSummaryModel = getUsageOverviewSummaryModelLabel();
   try {
     usageOverviewSummary = await summarizeUsageOverviewWithOpenAI({
       firestoreSummary,
@@ -828,10 +845,12 @@ async function main() {
       openaiSummary,
       roughCostSummary,
     });
+    usageOverviewSummaryModel = getUsageOverviewSummaryModelLabel();
   } catch (error) {
     console.warn(
       `[usage-summary] OpenAI summarize skipped: ${error?.message || String(error)}`,
     );
+    usageOverviewSummaryModel = "local-template(ai-error)";
   }
   const memoBody = buildUsageOverviewBody({
     firestoreSummary,
@@ -839,6 +858,7 @@ async function main() {
     storageSummary,
     openaiSummary,
     usageOverviewSummary,
+    usageOverviewSummaryModel,
   });
   const result = await saveMemoRecord({
     projectName: "usage",

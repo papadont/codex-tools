@@ -20,6 +20,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js" onload="window.dispatchEvent(new Event('codex-memo:mermaid-ready'))"></script>
     <style>
       :root {
         --memo-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -157,6 +158,21 @@
       }
       .markdown-preview li::marker {
         color: #a98b66;
+      }
+      .markdown-preview .mermaid {
+        margin: 0.9em 0;
+        overflow-x: auto;
+        border-radius: 10px;
+        background: #fefdfb;
+        padding: 8px;
+      }
+      .markdown-preview .mermaid svg {
+        max-width: 100%;
+        height: auto;
+      }
+      .markdown-preview .mermaid-error {
+        color: #9a4b5f;
+        white-space: pre-wrap;
       }
       .markdown-preview .md-dash-list-item {
         position: relative;
@@ -408,6 +424,12 @@
           </div>
 
           <div id="editorDivider" class="mb-2 mt-1 border-t border-[#ece7df]"></div>
+          <div id="docIdRow" class="mb-1 hidden items-center gap-1.5 text-[11px] text-[#7a8398]">
+            <span class="shrink-0">doc id</span>
+            <button id="copyDocIdBtn" tabindex="-1" type="button" class="min-w-0 truncate rounded-md border border-transparent bg-transparent px-1.5 py-0.5 font-mono text-[11px] leading-4 text-[#4e6f9f] hover:border-[#d8d3cc] hover:bg-[#fefdfb]" title="Copy document id">
+              <span id="docIdText"></span>
+            </button>
+          </div>
           <div class="mb-1 flex items-center gap-2">
             <label for="threadTitleInput" class="whitespace-nowrap text-[11px] text-[#7a8398]">thread</label>
             <div class="flex-1">
@@ -487,6 +509,6 @@
     </div>
 
     <script src="/markdown_theme_codex_memo.js?v=20260223-01"></script>
-    <script src="/app.js?v=20260315-01"></script>
+    <script src="/app.js?v=20260606-01"></script>
   </body>
 </html>
