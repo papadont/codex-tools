@@ -1,0 +1,9 @@
+node_modules
+.git
+.env
+dist
+pet-runs
+codex-memo-web
+apps
+test
+npm-debug.log*

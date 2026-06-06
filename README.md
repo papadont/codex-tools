@@ -115,8 +115,8 @@ Storage 接続確認:
 npm run firebase:storage:check
 ```
 
-### codex-memo MCP PoC
-read-only の stdio MCP server:
+### codex-memo MCP
+read-only のローカル stdio MCP server:
 ```bash
 npm run memo:mcp
 ```
@@ -142,9 +142,101 @@ MCP client 設定例:
 }
 ```
 
-PoC範囲:
-- Firestore `codex-memo` collection の read-only 参照のみ
-- 認証、remote 公開、作成/更新/削除 tool は次段階
+stdio版は Firestore `codex-memo` collection の read-only 参照のみ。
+
+#### Perplexity Web向け Remote MCP
+
+Remote版はAPIキー認証付きStreamable HTTPで、以下を公開する。
+
+- `list_recent_memos`
+- `search_memos`（直近最大500件のみ）
+- `get_memo`
+- `create_memo`
+- `update_memo`（`expectedUpdatedAtISO`による競合防止付き）
+
+ローカル起動:
+
+```bash
+CODEX_MEMO_REMOTE_API_KEY="replace-with-long-random-value" \
+CODEX_MEMO_ALLOWED_ORIGINS="https://www.perplexity.ai" \
+npm run memo:mcp:remote
+```
+
+- endpoint: `http://localhost:8080/mcp`
+- health check: `http://localhost:8080/health`
+- `Origin`がある場合は`CODEX_MEMO_ALLOWED_ORIGINS`との完全一致が必要
+- `Origin`なしのサーバー間通信は、有効なBearer APIキーがあれば許可
+- 添付は安全なメタデータのみ返し、署名URL・実ファイル・`storagePath`は公開しない
+
+Cloud Runへ手動デプロイする例:
+
+```bash
+PROJECT_ID="your-project-id"
+REGION="asia-northeast1"
+SERVICE="codex-memo-remote-mcp"
+BUCKET="your-project.firebasestorage.app" # gs:// prefixなし
+SECRET="codex-memo-remote-api-key"
+SERVICE_ACCOUNT="codex-memo-remote-mcp"
+SERVICE_ACCOUNT_EMAIL="$SERVICE_ACCOUNT@$PROJECT_ID.iam.gserviceaccount.com"
+
+gcloud config set project "$PROJECT_ID"
+gcloud services enable \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  secretmanager.googleapis.com
+
+gcloud iam service-accounts create "$SERVICE_ACCOUNT" \
+  --display-name="codex-memo Remote MCP"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+  --role="roles/datastore.user"
+gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" \
+  --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+  --role="roles/storage.objectAdmin"
+
+gcloud secrets create "$SECRET" --replication-policy=automatic
+printf '%s' "replace-with-long-random-value" | \
+  gcloud secrets versions add "$SECRET" --data-file=-
+gcloud secrets add-iam-policy-binding "$SECRET" \
+  --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+  --role="roles/secretmanager.secretAccessor"
+
+gcloud run deploy "$SERVICE" \
+  --source . \
+  --region "$REGION" \
+  --service-account "$SERVICE_ACCOUNT_EMAIL" \
+  --no-invoker-iam-check \
+  --min-instances 0 \
+  --max-instances 1 \
+  --cpu 1 \
+  --memory 512Mi \
+  --timeout 60 \
+  --set-env-vars CODEX_MEMO_FIREBASE_BUCKET="$BUCKET",CODEX_MEMO_ALLOWED_ORIGINS="https://www.perplexity.ai" \
+  --set-secrets CODEX_MEMO_REMOTE_API_KEY="$SECRET:latest"
+```
+
+上記ではRemote MCP専用サービスアカウントへ、Firestore読み書き、Storage object操作、
+対象Secretの参照権限だけを付与する。Cloud RunではADCを使うため、
+`GOOGLE_APPLICATION_CREDENTIALS`は設定しない。再デプロイ時は、既存Secretへ新しいversionを追加し、
+サービスアカウントとIAM bindingの作成コマンドは省略する。
+`--no-invoker-iam-check`は、PerplexityのBearer APIキーをCloud Run IAMではなく
+Remote MCPアプリ側で検証するために必要。
+
+デプロイ後:
+
+```bash
+SERVICE_URL="$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"
+curl "$SERVICE_URL/health"
+```
+
+PerplexityのCustom Remote Connectorには`$SERVICE_URL/mcp`を登録し、認証方式はAPI Keyを選ぶ。
+実接続で送信される`Origin`が異なる場合は、確認した値だけを
+`CODEX_MEMO_ALLOWED_ORIGINS`へ追加する。
+
+コスト事故防止として、月額500円の予算アラートとArtifact Registryの古いイメージ削除ルールを
+Google Cloud Consoleで設定する。初回接続が60秒以内に成立しない場合だけ
+Cloud Runの`min-instances`を`1`へ変更する。
 
 ### メモ保存
 ```bash
