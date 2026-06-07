@@ -63,21 +63,11 @@ const QUICK_MEMO_LEGACY_PROJECT_NAMES = new Set([
 ]);
 const USAGE_PANEL_HOURS = 24 * 14;
 const USAGE_FETCH_TIMEOUT_MS = 8000;
-const FIREBASE_USAGE_PAGE_URL =
-  "https://console.firebase.google.com/project/hush-pointer/firestore/databases/-default-/usage/prev-24h";
-const STORAGE_USAGE_PAGE_URL =
-  "https://console.firebase.google.com/project/hush-pointer/storage";
-const CODEX_USAGE_PAGE_URL = "https://chatgpt.com/codex/settings/usage";
-const OPENAI_USAGE_PAGE_URL = "https://platform.openai.com/usage";
-const AI_STUDIO_RATE_LIMIT_PAGE_URL =
-  "https://aistudio.google.com/rate-limit?timeRange=last-1-days";
-const USAGE_REF_PAGE_URLS = [
-  FIREBASE_USAGE_PAGE_URL,
-  STORAGE_USAGE_PAGE_URL,
-  CODEX_USAGE_PAGE_URL,
-  OPENAI_USAGE_PAGE_URL,
-  AI_STUDIO_RATE_LIMIT_PAGE_URL,
-];
+const USAGE_OVERVIEW_SHARED = window.UsageOverviewShared;
+const USAGE_REF_PAGE_URLS = USAGE_OVERVIEW_SHARED.getUsageRefPageUrls();
+const USAGE_REF_URLS_BY_KEY = Object.fromEntries(
+  USAGE_OVERVIEW_SHARED.USAGE_REF_LINKS.map((link) => [link.key, link.url]),
+);
 const OPENAI_COSTS_FETCH_TIMEOUT_MS = 20_000;
 const STATUS_BANNER_DEFAULT_MS = 3000;
 const STATUS_BANNER_ERROR_MS = 12000;
@@ -333,10 +323,7 @@ let mermaidInitialized = false;
 let mermaidRenderSeq = 0;
 
 function usageSourceFooterLines() {
-  return [
-    "",
-    `<small><a href="#" class="usage-refs-trigger" data-open-usage-refs="1">refs:</a> [firestore usage](${FIREBASE_USAGE_PAGE_URL}) | [storage](${STORAGE_USAGE_PAGE_URL}) | [codex usage](${CODEX_USAGE_PAGE_URL}) | [openai usage](${OPENAI_USAGE_PAGE_URL}) | [ai studio rate limits](${AI_STUDIO_RATE_LIMIT_PAGE_URL})</small>`,
-  ];
+  return USAGE_OVERVIEW_SHARED.usageSourceFooterLines({ interactive: true });
 }
 
 const el = {
@@ -2018,6 +2005,29 @@ function getFirestoreTodaySnapshot() {
   return { today, ratePercent, relativePercent };
 }
 
+function getFirestoreActivitySnapshot() {
+  const rows = Array.isArray(state.usageSummary?.perDay)
+    ? state.usageSummary.perDay.slice(-14)
+    : [];
+  const totalFor = (key) =>
+    rows.reduce((sum, row) => sum + Number(row?.[key] || 0), 0);
+  const peakFor = (key) =>
+    rows.reduce(
+      (peak, row) =>
+        Number(row?.[key] || 0) > Number(peak?.value || 0)
+          ? { date: row?.date || "-", value: Number(row?.[key] || 0) }
+          : peak,
+      { date: "-", value: 0 },
+    );
+  const days = Math.max(1, rows.length);
+  return {
+    days: rows.length,
+    read: { total: totalFor("read"), avg: totalFor("read") / days, peak: peakFor("read") },
+    write: { total: totalFor("write"), avg: totalFor("write") / days, peak: peakFor("write") },
+    delete: { total: totalFor("delete"), avg: totalFor("delete") / days, peak: peakFor("delete") },
+  };
+}
+
 function getStorageSnapshot() {
   const summary = state.storageUsageSummary || null;
   const estimate = summary?.estimate || {};
@@ -2273,123 +2283,38 @@ function restoreUsageOverviewSnapshot(snapshot) {
 }
 
 function buildUsageOverviewBody() {
-  const fs = getFirestoreTodaySnapshot();
-  const storage = getStorageSnapshot();
-  const openai = getOpenAISnapshot();
-  const roughCost = getRoughMonthlyCostSnapshot();
-  const codexPrimary = state.codexUsageSummary?.primaryWindow || null;
-  const codexSecondary = state.codexUsageSummary?.secondaryWindow || null;
-  const monthPace = getMonthPaceInfo();
-  const openaiRecentUsd = Number(state.openaiCostsSummary?.totalUsd14d || 0);
-  const openaiRecentJpy = openaiRecentUsd * roughCost.usdToJpy;
-  const openaiLineItems14d = formatOpenAILineItems14d(
-    state.openaiCostsSummary?.lineItems14d,
-    roughCost.usdToJpy,
-  );
-  const fsPerDay = Array.isArray(state.usageSummary?.perDay)
-    ? state.usageSummary.perDay
-    : [];
-  const fs14Desc = [...fsPerDay]
-    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
-    .slice(0, 14);
-
-  const lines = [
-    `rough monthly cost: **${formatJpy(roughCost.totalJpy, 0)}** / line ¥3000 (Storage ${formatJpy(roughCost.storageJpy, 0)} + OpenAI ${formatJpy(roughCost.openaiJpy, 0)})`,
-  ];
-  if (state.usageOverviewAiSummary) {
-    lines.push("");
-    lines.push(...quoteMarkdownLines(state.usageOverviewAiSummary));
-    lines.push(
-      ...quoteUsageOverviewSummaryModelLine(
-        state.usageOverviewAiSummaryModel,
-      ),
-    );
-  }
-  lines.push(
-    "",
-    "## Codex",
-    "",
-    state.codexUsageSummary
-      ? `- 5h remaining: ${boldPercent(codexPrimary?.remainingPercent, 0)} reset: ${resetDateText(codexPrimary)}`
-      : `- status: ${state.codexUsageError ? `error (${state.codexUsageError})` : "loading"}`,
-    state.codexUsageSummary
-      ? `- weekly remaining: ${boldPercent(codexSecondary?.remainingPercent, 0)} reset: ${resetDateText(codexSecondary)}`
-      : "- weekly remaining: -",
-    state.codexUsageSummary
-      ? `- next resetまで: ${formatDuration(state.codexUsageSummary?.secondaryWindow?.resetAfterSeconds || 0)} / used ${boldPercent(codexSecondary?.usedPercent, 0)}`
-      : "- next resetまで: -",
-    "",
-    "## OpenAI API",
-    "",
-    state.openaiCostsSummary
-      ? state.openaiCostsSummary.available
-        ? `- month cost: **${formatJpy(roughCost.openaiJpy, 0)}** / day ${monthPace.dayOfMonth}/${monthPace.daysInMonth}`
-        : `- status: unavailable (${state.openaiCostsSummary.reason || "-"})`
-      : `- status: ${state.openaiCostsError ? `error (${state.openaiCostsError})` : "loading"}`,
-    state.openaiCostsSummary && state.openaiCostsSummary.available
-      ? `- last 14d spend: **${formatUsd(openaiRecentUsd, 3)}** (${formatJpy(openaiRecentJpy, 0)})`
-      : "- last 14d spend: -",
-    "",
-    "## Firestore",
-    "",
-    state.usageSummary
-      ? `- today free-tier: R ${boldPercent(fs.ratePercent.read, 1)} / W ${boldPercent(fs.ratePercent.write, 1)} / D ${boldPercent(fs.ratePercent.delete, 1)}`
-      : `- status: ${state.usageError ? `error (${state.usageError})` : "loading"}`,
-    state.usageSummary
-      ? `- vs 14d peak: ${formatPeakPaceMetric("R", fs.relativePercent.read)} / ${formatPeakPaceMetric("W", fs.relativePercent.write)} / ${formatPeakPaceMetric("D", fs.relativePercent.delete)}`
-      : "- vs 14d peak: -",
-    "",
-    "## Storage",
-    "",
-    state.storageUsageSummary
-      ? `- now: ${formatBytes(storage.bytes)} / objects ${formatNumberCompact(storage.objects)}`
-      : `- status: ${state.storageUsageError ? `error (${state.storageUsageError})` : "loading"}`,
-    state.storageUsageSummary
-      ? `- no-cost: storage ${boldPercent(storage.percentOfNoCost.storage, 1)} / egress ${boldPercent(storage.percentOfNoCost.download, 1)} / A ${boldPercent(storage.percentOfNoCost.classA, 1)} / B ${boldPercent(storage.percentOfNoCost.classB, 1)}`
-      : "- no-cost: -",
-    state.storageUsageSummary
-      ? `- 30d pace: egress ${formatBytes(storage.egressBytes30d)} / rough overage ${formatJpy(roughCost.storageJpy, 0)} mo`
-      : "- 30d pace: -",
-    "",
-    "### OpenAI 14d line items",
-    "",
-    "| model | input | output | total |",
-    "| --- | ---: | ---: | ---: |",
-  );
-
-  if (openaiLineItems14d && openaiLineItems14d.length) {
-    for (const item of openaiLineItems14d) {
-      const inputUsd = item.entries
-        .filter((entry) => entry.kind === "input")
-        .reduce((sum, entry) => sum + entry.amountUsd, 0);
-      const outputUsd = item.entries
-        .filter((entry) => entry.kind === "output")
-        .reduce((sum, entry) => sum + entry.amountUsd, 0);
-      const totalJpy = Math.round(item.totalUsd * roughCost.usdToJpy);
-      lines.push(
-        `| ${item.model} | ${formatUsd(inputUsd, 3)} | ${formatUsd(outputUsd, 3)} | ${formatUsd(item.totalUsd, 3)} (${formatJpy(totalJpy, 0)}) |`,
-      );
-    }
-  } else {
-    lines.push("| - | - | - | - |");
-  }
-
-  lines.push(
-    "",
-    "### Firestore 14d details",
-    "",
-    "| date (UTC) | read | write | delete | total |",
-    "| --- | ---: | ---: | ---: | ---: |",
-  );
-
-  for (const day of fs14Desc) {
-    lines.push(
-      `| ${day.date || "-"} | ${day.read || 0} | ${day.write || 0} | ${day.delete || 0} | ${day.total || 0} |`,
-    );
-  }
-
-  lines.push(...usageSourceFooterLines());
-  return lines.join("\n");
+  return USAGE_OVERVIEW_SHARED.buildUsageOverviewBody({
+    firestoreSummary: state.usageSummary,
+    firestoreError: state.usageError,
+    firestoreSnapshot: getFirestoreTodaySnapshot(),
+    firestoreActivitySnapshot: getFirestoreActivitySnapshot(),
+    storageSummary: state.storageUsageSummary,
+    storageError: state.storageUsageError,
+    storageSnapshot: getStorageSnapshot(),
+    openaiSummary: state.openaiCostsSummary,
+    openaiError: state.openaiCostsError,
+    openaiSnapshot: getOpenAISnapshot(),
+    codexSummary: state.codexUsageSummary,
+    codexError: state.codexUsageError,
+    roughCost: getRoughMonthlyCostSnapshot(),
+    monthPace: getMonthPaceInfo(),
+    usageOverviewSummary: state.usageOverviewAiSummary,
+    usageOverviewSummaryModel: state.usageOverviewAiSummaryModel,
+    interactiveRefs: true,
+    helpers: {
+      formatJpy,
+      formatUsd,
+      formatBytes,
+      formatNumberCompact,
+      boldPercent,
+      formatPeakPaceMetric,
+      formatDuration,
+      formatDate,
+      quoteMarkdownLines,
+      quoteUsageOverviewSummaryModelLine,
+      formatOpenAILineItems14d,
+    },
+  });
 }
 
 function buildUsageOverviewPanelItem(options = {}) {
@@ -4169,7 +4094,7 @@ function renderList() {
         : state.usageError
           ? "error"
           : "loading...",
-      dblclickUrl: FIREBASE_USAGE_PAGE_URL,
+      dblclickUrl: USAGE_REF_URLS_BY_KEY.firestore,
       titleText: "Double-click to open Firestore usage",
     }),
   );
@@ -4205,7 +4130,7 @@ function renderList() {
         : state.storageUsageError
           ? "error"
           : "loading...",
-      dblclickUrl: STORAGE_USAGE_PAGE_URL,
+      dblclickUrl: USAGE_REF_URLS_BY_KEY.storage,
       titleText: "Double-click to open Storage usage",
     }),
   );
@@ -4242,7 +4167,7 @@ function renderList() {
         : state.openaiCostsError
           ? "error"
           : "loading...",
-      dblclickUrl: OPENAI_USAGE_PAGE_URL,
+      dblclickUrl: USAGE_REF_URLS_BY_KEY.openai,
       titleText: "Double-click to open OpenAI usage",
     }),
   );
@@ -4280,7 +4205,7 @@ function renderList() {
         : state.codexUsageError
           ? "error"
           : "loading...",
-      dblclickUrl: CODEX_USAGE_PAGE_URL,
+      dblclickUrl: USAGE_REF_URLS_BY_KEY.codex,
       titleText: "Double-click to open Codex usage",
     }),
   );
