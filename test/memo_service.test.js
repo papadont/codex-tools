@@ -32,9 +32,35 @@ function createFirestoreMock(initialDocs = {}) {
     };
   }
 
+  function queryFor(entries) {
+    return {
+      count() {
+        return {
+          async get() {
+            return {
+              data() {
+                return { count: entries.length };
+              }
+            };
+          }
+        };
+      },
+      limit() {
+        return {
+          async get() {
+            return {
+              docs: entries.map(([id]) => snapshotFor(id))
+            };
+          }
+        };
+      }
+    };
+  }
+
   return {
     collection() {
       return {
+        ...queryFor(Array.from(docs.entries())),
         doc(id) {
           const docId = id || `doc_${++idCounter}`;
           return {
@@ -55,19 +81,33 @@ function createFirestoreMock(initialDocs = {}) {
             }
           };
         },
-        limit() {
-          return {
-            async get() {
-              return {
-                docs: Array.from(docs.entries()).map(([id]) => snapshotFor(id))
-              };
-            }
-          };
+        where(field, operator, value) {
+          assert.equal(operator, "==");
+          return queryFor(
+            Array.from(docs.entries()).filter(([, data]) => data[field] === value)
+          );
         }
       };
     }
   };
 }
+
+test("countMemosByStorageKind includes legacy missing storageKind as Firebase", async () => {
+  const { memoService } = createServiceContext({
+    docs: {
+      firebase: { storageKind: "firebase" },
+      icloud: { storageKind: "icloud" },
+      local: { storageKind: "local" },
+      legacy: {}
+    }
+  });
+
+  assert.deepEqual(await memoService.countMemosByStorageKind(), {
+    total: 3,
+    firebase: 2,
+    icloud: 1
+  });
+});
 
 class FakeBucketFile {
   constructor(bucket, name) {

@@ -1783,6 +1783,29 @@ async function main() {
     }
   });
 
+  app.get("/api/memo-counts", async (req, res) => {
+    try {
+      const noCache = String(req.query.nocache || "").trim() === "1";
+      const cacheKey = "memo-counts";
+      if (!noCache) {
+        const cached = getCache(cacheKey);
+        if (cached) {
+          res.setHeader("X-Cache", "HIT");
+          res.json(cached);
+          return;
+        }
+      }
+      const payload = { counts: await memoService.countMemosByStorageKind() };
+      if (!noCache) {
+        setCache(cacheKey, payload);
+      }
+      res.setHeader("X-Cache", "MISS");
+      res.json(payload);
+    } catch (error) {
+      res.status(500).json({ error: error.message || "Failed to count memos." });
+    }
+  });
+
   app.get("/api/usage/firestore", async (req, res) => {
     try {
       const hours = Math.min(Math.max(Number(req.query.hours) || 24 * 14, 1), 24 * 60);

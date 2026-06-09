@@ -189,6 +189,25 @@ function createMemoService({ db, collection, runtimeConfig, adapterRegistry, adm
       .filter((memo) => isAllowedStorageKind(memo.storageKind));
   }
 
+  async function countMemosByStorageKind() {
+    const collectionRef = db.collection(collection);
+    const [allSnap, icloudSnap, localSnap] = await Promise.all([
+      collectionRef.count().get(),
+      collectionRef.where("storageKind", "==", "icloud").count().get(),
+      collectionRef.where("storageKind", "==", "local").count().get()
+    ]);
+    const total = Math.max(
+      0,
+      Number(allSnap.data().count || 0) - Number(localSnap.data().count || 0)
+    );
+    const icloud = Number(icloudSnap.data().count || 0);
+    return {
+      total,
+      firebase: Math.max(0, total - icloud),
+      icloud
+    };
+  }
+
   async function getMemo(id) {
     const doc = await db.collection(collection).doc(id).get();
     if (!doc.exists) return null;
@@ -310,6 +329,7 @@ function createMemoService({ db, collection, runtimeConfig, adapterRegistry, adm
     assertAllowedStorageKind,
     canMigrateStorageKind,
     listMemos,
+    countMemosByStorageKind,
     getMemo,
     createMemo,
     updateMemo,

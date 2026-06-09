@@ -1,5 +1,6 @@
 const state = {
   items: [],
+  memoCounts: null,
   selectedId: null,
   runtimeConfig: {
     storageMode: "mixed",
@@ -329,6 +330,8 @@ function usageSourceFooterLines() {
 const el = {
   memoList: document.getElementById("memoList"),
   memoSidebar: document.getElementById("memoSidebar"),
+  memoSidebarScroll: document.getElementById("memoSidebarScroll"),
+  memoCountStatus: document.getElementById("memoCountStatus"),
   usagePanelSlot: document.getElementById("usagePanelSlot"),
   appTitle: document.getElementById("appTitle"),
   qInput: document.getElementById("qInput"),
@@ -776,11 +779,49 @@ function hideStatusBanner() {
 }
 
 function syncStickySlotDivider() {
-  if (!el.memoSidebar || !el.usagePanelSlot) return;
+  if (!el.memoSidebarScroll || !el.usagePanelSlot) return;
   el.usagePanelSlot.classList.toggle(
     "sticky-slot-scrolled",
-    Number(el.memoSidebar.scrollTop || 0) > 0,
+    Number(el.memoSidebarScroll.scrollTop || 0) > 0,
   );
+}
+
+function renderMemoCountStatus() {
+  if (!el.memoCountStatus) return;
+  const counts = state.memoCounts;
+  if (!counts) {
+    el.memoCountStatus.textContent = "Total memos —";
+    return;
+  }
+  el.memoCountStatus.replaceChildren();
+  const parts = [
+    ["Total memos ", counts.total],
+    [" · Firebase ", counts.firebase],
+    [" + iCloud ", counts.icloud],
+  ];
+  for (const [label, value] of parts) {
+    el.memoCountStatus.append(document.createTextNode(label));
+    const strong = document.createElement("strong");
+    strong.className = "font-bold text-[#56647d]";
+    strong.textContent = String(value);
+    el.memoCountStatus.append(strong);
+  }
+}
+
+async function loadMemoCounts(options = {}) {
+  const params = new URLSearchParams();
+  if (options.forceReload) params.set("nocache", "1");
+  try {
+    const res = await fetch(`/api/memo-counts?${params.toString()}`);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body.error || `HTTP ${res.status}`);
+    }
+    state.memoCounts = body.counts || null;
+    renderMemoCountStatus();
+  } catch (_error) {
+    if (!state.memoCounts) renderMemoCountStatus();
+  }
 }
 
 function renderAutoRefreshIndicator() {
@@ -4838,6 +4879,7 @@ async function loadMemos(options = {}) {
   }
   const forceReload = Boolean(options.forceReload);
   const usageJob = Promise.resolve(false);
+  loadMemoCounts({ forceReload });
 
   try {
     const selectFirst = Boolean(options.selectFirst);
@@ -5508,8 +5550,8 @@ function initEvents() {
   window.addEventListener("codex-memo:mermaid-ready", () => {
     if (getBodyMode() === "preview") renderMarkdownPreview();
   });
-  if (el.memoSidebar) {
-    el.memoSidebar.addEventListener("scroll", syncStickySlotDivider, {
+  if (el.memoSidebarScroll) {
+    el.memoSidebarScroll.addEventListener("scroll", syncStickySlotDivider, {
       passive: true,
     });
   }
