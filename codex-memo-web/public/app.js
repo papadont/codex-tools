@@ -43,6 +43,7 @@ const state = {
   usageRefreshReason: "",
   persistedUsageOverview: null,
   editorAttachments: [],
+  attachmentListExpanded: false,
   markdownCssMemoId: null,
   markdownCssMemoBody: "",
   pointerClientX: 0,
@@ -355,6 +356,7 @@ const el = {
   copyDocIdBtn: document.getElementById("copyDocIdBtn"),
   addImageBtn: document.getElementById("addImageBtn"),
   attachmentInput: document.getElementById("attachmentInput"),
+  attachmentToggle: document.getElementById("attachmentToggle"),
   attachmentList: document.getElementById("attachmentList"),
   storageInfo: document.getElementById("storageInfo"),
   bodyModeToggle: document.getElementById("bodyModeToggle"),
@@ -1348,14 +1350,44 @@ function bodyContainsAttachment(attachmentId) {
 }
 
 function renderAttachmentList() {
-  if (!el.attachmentList) return;
+  if (!el.attachmentList || !el.attachmentToggle) return;
   const attachments = currentEditorAttachments();
   el.attachmentList.innerHTML = "";
   if (!attachments.length) {
+    state.attachmentListExpanded = false;
+    el.attachmentToggle.classList.add("hidden");
     el.attachmentList.classList.add("hidden");
+    el.attachmentList.classList.remove("flex");
     return;
   }
-  el.attachmentList.classList.remove("hidden");
+  const imageCount = attachments.filter(isImageAttachment).length;
+  const fileCount = attachments.length - imageCount;
+  const summaryParts = [
+    ["Attachments ", attachments.length],
+    ...(imageCount ? [[" · Images ", imageCount]] : []),
+    ...(fileCount ? [[" · Files ", fileCount]] : []),
+  ];
+  el.attachmentToggle.replaceChildren();
+  for (const [label, value] of summaryParts) {
+    el.attachmentToggle.append(document.createTextNode(label));
+    const strong = document.createElement("strong");
+    strong.className = "font-bold text-[#56647d]";
+    strong.textContent = String(value);
+    el.attachmentToggle.append(strong);
+  }
+  el.attachmentToggle.append(
+    document.createTextNode(` ${state.attachmentListExpanded ? "▾" : "▴"}`),
+  );
+  el.attachmentToggle.title = state.attachmentListExpanded
+    ? "Hide attachments"
+    : "Show attachments";
+  el.attachmentToggle.setAttribute(
+    "aria-expanded",
+    String(state.attachmentListExpanded),
+  );
+  el.attachmentToggle.classList.remove("hidden");
+  el.attachmentList.classList.toggle("hidden", !state.attachmentListExpanded);
+  el.attachmentList.classList.toggle("flex", state.attachmentListExpanded);
 
   attachments.forEach((item) => {
     const chip = document.createElement("div");
@@ -4698,6 +4730,7 @@ function fillEditor(item, options = {}) {
   state.editorAttachments = normalizeEditorAttachments(
     normalizedItem?.attachments,
   );
+  state.attachmentListExpanded = false;
   renderAttachmentList();
   renderStorageInfo(state.selectedId ? normalizedItem : null);
   renderEditorDocId(normalizedItem);
@@ -5561,6 +5594,16 @@ function initEvents() {
   document.addEventListener("click", (ev) => {
     const target = ev.target;
     if (
+      state.attachmentListExpanded &&
+      target &&
+      target.closest &&
+      !target.closest("#attachmentToggle") &&
+      !target.closest("#attachmentList")
+    ) {
+      state.attachmentListExpanded = false;
+      renderAttachmentList();
+    }
+    if (
       target &&
       target.closest &&
       (target.closest("#summaryBtn") || target.closest("#summaryTooltip"))
@@ -5579,6 +5622,10 @@ function initEvents() {
   });
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") {
+      if (state.attachmentListExpanded) {
+        state.attachmentListExpanded = false;
+        renderAttachmentList();
+      }
       hideSummaryTooltip();
       closeAppMenu();
     }
@@ -5762,6 +5809,10 @@ function initEvents() {
     }
     el.attachmentInput.value = "";
     el.attachmentInput.click();
+  });
+  el.attachmentToggle.addEventListener("click", () => {
+    state.attachmentListExpanded = !state.attachmentListExpanded;
+    renderAttachmentList();
   });
   el.attachmentInput.addEventListener("change", async (ev) => {
     try {

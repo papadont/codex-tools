@@ -467,15 +467,16 @@
               <textarea id="memoBodyInput" rows="14" class="h-full min-h-0 flex-1 resize-y rounded-xl border border-[#c9ced7] bg-[#fefdfb] px-2 py-2 text-sm outline-none focus:border-[#7f90b0]"></textarea>
               <article id="memoPreview" class="markdown-preview hidden h-full min-h-0 flex-1 overflow-auto rounded-xl border border-[#c9ced7] bg-[#fefdfb] px-3 py-2 text-sm"></article>
             </div>
-            <div class="mt-0.5 shrink-0">
+            <div class="-mx-4 mt-0.5 shrink-0 border-t border-[#d8d2c8] bg-[#eeefed] px-4 py-0.5">
               <input id="attachmentInput" type="file" accept="image/*,application/pdf,.pdf" multiple class="hidden" />
-              <div class="flex items-start gap-1.5">
+              <div class="relative flex h-6 items-center gap-1.5">
                 <button id="addImageBtn" tabindex="-1" type="button" aria-label="Add attachment" title="Add attachment" class="inline-flex h-6 w-6 shrink-0 items-center justify-center text-[#5e6f8d] hover:text-[#7f90b0]">
                   <svg viewBox="0 0 24 24" aria-hidden="true" class="h-4 w-4 fill-none stroke-current" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M8.5 12.5 14 7a3 3 0 1 1 4.24 4.24l-7.07 7.07a5 5 0 0 1-7.07-7.07l7.43-7.43"></path>
                   </svg>
                 </button>
-                <div id="attachmentList" class="hidden flex-1 flex-wrap items-center gap-1 text-[10px] text-[#7a8398]"></div>
+                <button id="attachmentToggle" type="button" aria-expanded="false" class="hidden min-w-0 flex-1 truncate text-left text-[10px] leading-4 text-[#6f7b91] hover:text-[#56647d]"></button>
+                <div id="attachmentList" class="absolute bottom-full left-0 right-0 z-20 mb-1 hidden max-h-40 flex-wrap items-center gap-1 overflow-auto rounded-lg border border-[#d8d2c8] bg-[#eeefed] p-2 text-[10px] text-[#7a8398] shadow-lg"></div>
               </div>
             </div>
           </div>
