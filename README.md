@@ -5,7 +5,7 @@ Codex周辺ツールをまとめる保守用リポジトリ。
 ## このプロジェクトに属するアプリ
 - `codex-tools.app`:
   - メニューバー常駐アプリ
-  - `hush-pointer` / `codex-memo` 起動制御
+  - `hush-pointer` / `codex-memo` / `Feather Touch Typing` 起動制御
   - Codex 1w reset 表示（`dist/usage-reports/weekly/latest.json` 参照）
 - `codex-memo` (Web):
   - Firestore `codex-memo` を閲覧/編集/削除/ダウンロード

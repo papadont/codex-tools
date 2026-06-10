@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var statusItem: NSStatusItem!
   private var hushProcess: Process?
   private var memoProcess: Process?
+  private var typingProcess: Process?
   private var codexResetStatusItem: NSMenuItem!
   private var memoModeStatusItem: NSMenuItem!
   private var statusTimer: Timer?
@@ -13,10 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private let homeDir = NSHomeDirectory()
   private lazy var hushDir = "\(homeDir)/Documents/develop/hush-pointer"
   private lazy var codexToolsDir = "\(homeDir)/Documents/develop/codex-tools"
+  private lazy var typingDir = "\(homeDir)/Documents/develop/Feather Touch Typing"
   private lazy var credentialsPath = ProcessInfo.processInfo.environment["GOOGLE_APPLICATION_CREDENTIALS"]
     ?? "\(homeDir)/.config/gcp/codex-tools-firestore-sa.json"
   private let hushLogPath = "/tmp/hush-pointer-dev.log"
   private let memoLogPath = "/tmp/codex-memo-web.log"
+  private let typingLogPath = "/tmp/feather-touch-typing-dev.log"
   private let appLogPath = "/tmp/codex-tools-menubar.log"
   private let npmPath = "/opt/homebrew/bin/npm"
   private let nodePath = "/opt/homebrew/bin/node"
@@ -27,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ensureFileExists(at: appLogPath)
     log("app launched")
     setupMenuBar()
-    restartBoth()
+    restartAll()
     startStatusPolling()
     updateStatusItems()
   }
@@ -35,12 +38,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationWillTerminate(_ notification: Notification) {
     log("app terminating")
     statusTimer?.invalidate()
-    stopBoth()
+    stopAll()
   }
 
   private func setupMenuBar() {
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    statusItem.button?.title = "[p/m]"
+    statusItem.button?.title = "[p/m/t]"
 
     let menu = NSMenu()
     codexResetStatusItem = NSMenuItem(title: "codex 1w reset: checking...", action: nil, keyEquivalent: "")
@@ -52,20 +55,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     menu.addItem(NSMenuItem.separator())
     menu.addItem(NSMenuItem(title: "Open hush log", action: #selector(openHushLogAction), keyEquivalent: "1"))
     menu.addItem(NSMenuItem(title: "Open memo log", action: #selector(openMemoLogAction), keyEquivalent: "2"))
+    menu.addItem(NSMenuItem(title: "Open Feather Touch Typing log", action: #selector(openTypingLogAction), keyEquivalent: "3"))
     menu.addItem(NSMenuItem.separator())
-    menu.addItem(NSMenuItem(title: "Restart Both", action: #selector(restartBothAction), keyEquivalent: "r"))
+    menu.addItem(NSMenuItem(title: "Restart All", action: #selector(restartAllAction), keyEquivalent: "r"))
     menu.addItem(NSMenuItem(title: "Restart hush-pointer", action: #selector(restartHushAction), keyEquivalent: "h"))
     menu.addItem(NSMenuItem(title: "Restart codex-memo (Mixed)", action: #selector(restartMemoMixedAction), keyEquivalent: "m"))
     menu.addItem(NSMenuItem(title: "Restart codex-memo (iCloud)", action: #selector(restartMemoICloudAction), keyEquivalent: "i"))
     menu.addItem(NSMenuItem(title: "Restart codex-memo (Firestore)", action: #selector(restartMemoFirestoreAction), keyEquivalent: "f"))
+    menu.addItem(NSMenuItem(title: "Restart Feather Touch Typing", action: #selector(restartTypingAction), keyEquivalent: "t"))
     menu.addItem(NSMenuItem.separator())
-    menu.addItem(NSMenuItem(title: "Stop Both", action: #selector(stopBothAction), keyEquivalent: "s"))
+    menu.addItem(NSMenuItem(title: "Stop All", action: #selector(stopAllAction), keyEquivalent: "s"))
     menu.addItem(NSMenuItem(title: "Stop hush-pointer", action: #selector(stopHushAction), keyEquivalent: "x"))
     menu.addItem(NSMenuItem(title: "Stop codex-memo", action: #selector(stopMemoAction), keyEquivalent: "c"))
+    menu.addItem(NSMenuItem(title: "Stop Feather Touch Typing", action: #selector(stopTypingAction), keyEquivalent: "y"))
     menu.addItem(NSMenuItem.separator())
-    menu.addItem(NSMenuItem(title: "Open Both in Browser", action: #selector(openBothInBrowserAction), keyEquivalent: "o"))
+    menu.addItem(NSMenuItem(title: "Open All in Browser", action: #selector(openAllInBrowserAction), keyEquivalent: "o"))
     menu.addItem(NSMenuItem(title: "Open hush in Browser", action: #selector(openHushInBrowserAction), keyEquivalent: "u"))
     menu.addItem(NSMenuItem(title: "Open memo in Browser", action: #selector(openMemoInBrowserAction), keyEquivalent: "i"))
+    menu.addItem(NSMenuItem(title: "Open Feather Touch Typing in Browser", action: #selector(openTypingInBrowserAction), keyEquivalent: "g"))
     menu.addItem(NSMenuItem.separator())
     menu.addItem(NSMenuItem(title: "Quit", action: #selector(quitAction), keyEquivalent: "q"))
 
@@ -76,13 +83,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     statusItem.menu = menu
   }
 
-  @objc private func restartBothAction() { restartBoth() }
+  @objc private func restartAllAction() { restartAll() }
   @objc private func restartHushAction() { restartHush() }
   @objc private func restartMemoMixedAction() { restartMemo(mode: "mixed") }
   @objc private func restartMemoICloudAction() { restartMemo(mode: "icloud") }
   @objc private func restartMemoFirestoreAction() { restartMemo(mode: "firebase") }
-  @objc private func stopBothAction() {
-    stopBoth()
+  @objc private func restartTypingAction() { restartTyping() }
+  @objc private func stopAllAction() {
+    stopAll()
     updateStatusItems()
   }
   @objc private func stopHushAction() {
@@ -91,6 +99,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
   @objc private func stopMemoAction() {
     stopMemo()
+    updateStatusItems()
+  }
+  @objc private func stopTypingAction() {
+    stopTyping()
     updateStatusItems()
   }
 
@@ -104,14 +116,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     NSWorkspace.shared.open(URL(fileURLWithPath: memoLogPath))
   }
 
+  @objc private func openTypingLogAction() {
+    ensureFileExists(at: typingLogPath)
+    NSWorkspace.shared.open(URL(fileURLWithPath: typingLogPath))
+  }
+
   @objc private func quitAction() {
-    stopBoth()
+    stopAll()
     NSApp.terminate(nil)
   }
 
-  @objc private func openBothInBrowserAction() {
+  @objc private func openAllInBrowserAction() {
     openHushInBrowserAction()
     openMemoInBrowserAction()
+    openTypingInBrowserAction()
   }
 
   @objc private func openHushInBrowserAction() {
@@ -126,9 +144,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
-  private func restartBoth() {
+  @objc private func openTypingInBrowserAction() {
+    if let url = URL(string: "http://localhost:5174") {
+      NSWorkspace.shared.open(url)
+    }
+  }
+
+  private func restartAll() {
     restartHush()
     restartMemo(mode: "mixed")
+    restartTyping()
     updateStatusItems()
   }
 
@@ -152,6 +177,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     updateStatusItems()
   }
 
+  private func restartTyping() {
+    log("restart typing")
+    runShell("pkill -f \(shellQuote("\(regexEscape(typingDir)).*\(regexEscape(npmPath)).*run dev")) || true")
+    runShell("pkill -f \(shellQuote("\(regexEscape(typingDir)).*vite")) || true")
+    typingProcess?.terminate()
+    typingProcess = launchShell("cd \(shellQuote(typingDir)) && \(shellQuote(npmPath)) run dev >> \(shellQuote(typingLogPath)) 2>&1")
+    updateStatusItems()
+  }
+
   private func memoLaunchCommand(for mode: String) -> String {
     switch mode {
     case "icloud":
@@ -163,9 +197,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
-  private func stopBoth() {
+  private func stopAll() {
     stopHush()
     stopMemo()
+    stopTyping()
     updateStatusItems()
   }
 
@@ -184,6 +219,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     runShell("pkill -f \(shellQuote("\(regexEscape(codexToolsDir)).*\(regexEscape(npmPath)).*run memo:web")) || true")
     memoProcess?.terminate()
     memoProcess = nil
+    updateStatusItems()
+  }
+
+  private func stopTyping() {
+    log("stop typing")
+    runShell("pkill -f \(shellQuote("\(regexEscape(typingDir)).*\(regexEscape(npmPath)).*run dev")) || true")
+    runShell("pkill -f \(shellQuote("\(regexEscape(typingDir)).*vite")) || true")
+    typingProcess?.terminate()
+    typingProcess = nil
     updateStatusItems()
   }
 
@@ -248,12 +292,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func updateStatusItems() {
     let hushRunning = isHushRunning()
     let memoRunning = isMemoRunning()
+    let typingRunning = isTypingRunning()
     memoModeStatusItem?.title = "memo mode: \(displayMemoMode(currentMemoLaunchMode))"
     codexResetStatusItem?.title = "codex 1w reset: \(readCodexWeeklyResetText())"
 
     let pChar = hushRunning ? "P" : "p"
     let mChar = memoRunning ? "M" : "m"
-    statusItem.button?.title = "\(pChar)/\(mChar)"
+    let tChar = typingRunning ? "T" : "t"
+    statusItem.button?.title = "\(pChar)/\(mChar)/\(tChar)"
   }
 
   private func displayMemoMode(_ mode: String) -> String {
@@ -308,6 +354,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func isMemoRunning() -> Bool {
     return pgrep(pattern: "node .*scripts/codex_memo_web_server\\.js")
       || pgrep(pattern: "\(regexEscape(codexToolsDir)).*\(regexEscape(npmPath)).*run memo:web")
+  }
+
+  private func isTypingRunning() -> Bool {
+    return pgrep(pattern: "\(regexEscape(typingDir)).*\(regexEscape(npmPath)).*run dev")
+      || pgrep(pattern: "\(regexEscape(typingDir)).*vite")
   }
 
   private func shellQuote(_ value: String) -> String {
