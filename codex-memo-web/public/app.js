@@ -2286,7 +2286,7 @@ function serializeUsageOverviewMemoBody(
   visibleBody,
   snapshot = buildUsageOverviewSnapshot(),
 ) {
-  const body = String(visibleBody || "").trim();
+  const body = USAGE_OVERVIEW_SHARED.moveUsageRefsToBodyStart(visibleBody).trim();
   if (!snapshot) return body;
   return [
     body,
@@ -2305,7 +2305,7 @@ function parseUsageOverviewMemoBody(rawMemoBody) {
   const match = raw.match(matcher);
   if (!match) {
     return {
-      visibleBody: raw,
+      visibleBody: USAGE_OVERVIEW_SHARED.moveUsageRefsToBodyStart(raw),
       snapshot: null,
     };
   }
@@ -2318,7 +2318,9 @@ function parseUsageOverviewMemoBody(rawMemoBody) {
   }
 
   return {
-    visibleBody: raw.replace(matcher, "").trimEnd(),
+    visibleBody: USAGE_OVERVIEW_SHARED.moveUsageRefsToBodyStart(
+      raw.replace(matcher, "").trimEnd(),
+    ),
     snapshot,
   };
 }

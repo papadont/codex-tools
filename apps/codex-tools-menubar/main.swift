@@ -133,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   @objc private func openHushInBrowserAction() {
-    if let url = URL(string: "http://localhost:5173") {
+    if let url = URL(string: "http://localhost:5173/hush-pointer/") {
       NSWorkspace.shared.open(url)
     }
   }
@@ -162,7 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     runShell("pkill -f \(shellQuote("\(regexEscape(hushDir)).*\(regexEscape(npmPath)).*run dev")) || true")
     runShell("pkill -f \(shellQuote("\(regexEscape(hushDir)).*vite")) || true")
     hushProcess?.terminate()
-    hushProcess = launchShell("cd \(shellQuote(hushDir)) && \(shellQuote(npmPath)) run dev >> \(shellQuote(hushLogPath)) 2>&1")
+    hushProcess = launchShell("cd \(shellQuote(hushDir)) && \(shellQuote(npmPath)) run dev -- --port 5173 --strictPort >> \(shellQuote(hushLogPath)) 2>&1")
     updateStatusItems()
   }
 
@@ -182,7 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     runShell("pkill -f \(shellQuote("\(regexEscape(typingDir)).*\(regexEscape(npmPath)).*run dev")) || true")
     runShell("pkill -f \(shellQuote("\(regexEscape(typingDir)).*vite")) || true")
     typingProcess?.terminate()
-    typingProcess = launchShell("cd \(shellQuote(typingDir)) && \(shellQuote(npmPath)) run dev >> \(shellQuote(typingLogPath)) 2>&1")
+    typingProcess = launchShell("cd \(shellQuote(typingDir)) && \(shellQuote(npmPath)) run dev -- --port 5174 --strictPort >> \(shellQuote(typingLogPath)) 2>&1")
     updateStatusItems()
   }
 

@@ -57,6 +57,29 @@
     return ["", `<small>${refsLabel} ${formatUsageRefLinks()}</small>`];
   }
 
+  function usageSourceHeaderLines(options = {}) {
+    const [, refsLine] = usageSourceFooterLines(options);
+    return [refsLine, ""];
+  }
+
+  function moveUsageRefsToBodyStart(body) {
+    const lines = String(body || "").split("\n");
+    const refsIndex = lines.findIndex((line) =>
+      /^<small>\s*(?:<a\b[^>]*>)?refs:(?:<\/a>)?\s/.test(line.trim()),
+    );
+    if (refsIndex < 0) return lines.join("\n");
+
+    const [refsLine] = lines.splice(refsIndex, 1);
+    if (refsIndex < lines.length && lines[refsIndex].trim() === "") {
+      lines.splice(refsIndex, 1);
+    }
+    if (refsIndex > 0 && lines[refsIndex - 1].trim() === "") {
+      lines.splice(refsIndex - 1, 1);
+    }
+    while (lines[0]?.trim() === "") lines.shift();
+    return [refsLine.trim(), "", ...lines].join("\n").trimEnd();
+  }
+
   function requireHelper(helpers, name) {
     const fn = helpers?.[name];
     if (typeof fn !== "function") {
@@ -125,6 +148,7 @@
       .slice(0, 14);
 
     const lines = [
+      ...usageSourceHeaderLines({ interactive: interactiveRefs }),
       `rough monthly cost: **${formatJpy(roughCost.totalJpy, 0)}** / line ¥3000 (Storage ${formatJpy(roughCost.storageJpy, 0)} + OpenAI ${formatJpy(roughCost.openaiJpy, 0)})`,
     ];
     if (usageOverviewSummary) {
@@ -230,7 +254,6 @@
       );
     }
 
-    lines.push(...usageSourceFooterLines({ interactive: interactiveRefs }));
     return lines.join("\n");
   }
 
@@ -238,6 +261,7 @@
     USAGE_REF_LINKS,
     getUsageRefPageUrls,
     usageSourceFooterLines,
+    moveUsageRefsToBodyStart,
     buildUsageOverviewBody,
   });
 });
