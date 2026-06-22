@@ -23,7 +23,10 @@ const USAGE_CACHE_TTL_MS = Number(process.env.USAGE_CACHE_TTL_MS || 180_000);
 const CODEX_USAGE_CACHE_TTL_MS = Number(process.env.CODEX_USAGE_CACHE_TTL_MS || 30_000);
 const STORAGE_USAGE_CACHE_TTL_MS = Number(process.env.STORAGE_USAGE_CACHE_TTL_MS || 180_000);
 const OPENAI_COSTS_CACHE_TTL_MS = Number(process.env.OPENAI_COSTS_CACHE_TTL_MS || 180_000);
-const CODEX_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
+const CODEX_USAGE_V2_ENDPOINT =
+  process.env.CODEX_USAGE_V2_ENDPOINT || "https://chatgpt.com/backend-api/api/codex/usage";
+const CODEX_USAGE_LEGACY_ENDPOINT =
+  process.env.CODEX_USAGE_ENDPOINT || "https://chatgpt.com/backend-api/wham/usage";
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
 const GEMINI_GENERATE_CONTENT_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const OPENAI_COSTS_ENDPOINT = "https://api.openai.com/v1/organization/costs";
@@ -836,23 +839,49 @@ function requireCredentials() {
   }
 }
 
-function formatResetAtISO(epochSeconds) {
+function epochSecondsToISO(epochSeconds) {
+  if (typeof epochSeconds === "string" && /\d{4}-\d{2}-\d{2}T/.test(epochSeconds)) {
+    const ms = new Date(epochSeconds).getTime();
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  }
   const n = Number(epochSeconds);
   if (!Number.isFinite(n) || n <= 0) return null;
-  return new Date(n * 1000).toISOString();
+  const ms = n > 10_000_000_000 ? n : n * 1000;
+  return new Date(ms).toISOString();
 }
 
-function mapRateLimitWindow(window) {
+function secondsUntil(resetAtISO, fetchedAtISO) {
+  const resetMs = new Date(resetAtISO || "").getTime();
+  const fetchedMs = new Date(fetchedAtISO || "").getTime();
+  if (!Number.isFinite(resetMs) || !Number.isFinite(fetchedMs)) return 0;
+  return Math.max(0, Math.round((resetMs - fetchedMs) / 1000));
+}
+
+function mapRateLimitWindow(window, fetchedAtISO = new Date().toISOString()) {
   if (!window || typeof window !== "object") return null;
-  const usedPercent = Number(window.used_percent || 0);
-  const limitWindowSeconds = Number(window.limit_window_seconds || 0);
-  const resetAfterSeconds = Number(window.reset_after_seconds || 0);
+  const usedPercent = Number(
+    window.used_percent ?? window.usedPercent ?? window.percentUsed ?? window.usagePercent ?? 0
+  );
+  const limitWindowSeconds = Number(
+    window.limit_window_seconds ??
+      window.limitWindowSeconds ??
+      window.window_seconds ??
+      (window.windowDurationMins == null ? 0 : Number(window.windowDurationMins) * 60)
+  );
+  const resetAtISO = epochSecondsToISO(
+    window.reset_at ?? window.resetsAt ?? window.resetAt ?? window.reset_at_iso ?? window.resetAtISO
+  );
+  const resetAfterSeconds = Number(
+    window.reset_after_seconds ?? window.resetAfterSeconds ?? secondsUntil(resetAtISO, fetchedAtISO)
+  );
   return {
     usedPercent,
-    remainingPercent: Math.max(0, 100 - usedPercent),
+    remainingPercent: Number(
+      window.remaining_percent ?? window.remainingPercent ?? Math.max(0, 100 - usedPercent)
+    ),
     limitWindowSeconds,
     resetAfterSeconds,
-    resetAtISO: formatResetAtISO(window.reset_at)
+    resetAtISO
   };
 }
 
@@ -870,33 +899,182 @@ function getCodexAccessToken() {
   return token;
 }
 
-async function getCodexUsagePayload() {
-  const token = getCodexAccessToken();
-  const res = await fetch(CODEX_USAGE_ENDPOINT, {
+async function fetchCodexJson(url, token) {
+  const res = await fetch(url, {
     method: "GET",
-    headers: { Authorization: `Bearer ${token}` }
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`
+    }
   });
-  const body = await res.json().catch(() => ({}));
+  const raw = await res.text();
+  let body = {};
+  try {
+    body = raw ? JSON.parse(raw) : {};
+  } catch {
+    body = { error: `non-JSON response (${res.status})` };
+  }
   if (!res.ok) {
     throw new Error(body?.detail || body?.error || `Codex usage API error (${res.status})`);
   }
+  return body;
+}
 
+function normalizeCodexCredits(raw) {
   return {
-    fetchedAtISO: new Date().toISOString(),
+    hasCredits: Boolean(raw?.has_credits ?? raw?.hasCredits),
+    unlimited: Boolean(raw?.unlimited),
+    balance: String(raw?.balance ?? "0"),
+    approxLocalMessages: Array.isArray(raw?.approx_local_messages)
+      ? raw.approx_local_messages
+      : Array.isArray(raw?.approxLocalMessages)
+        ? raw.approxLocalMessages
+        : [0, 0],
+    approxCloudMessages: Array.isArray(raw?.approx_cloud_messages)
+      ? raw.approx_cloud_messages
+      : Array.isArray(raw?.approxCloudMessages)
+        ? raw.approxCloudMessages
+        : [0, 0]
+  };
+}
+
+function normalizeCodexLimitSnapshot(raw, fetchedAtISO) {
+  if (!raw || typeof raw !== "object") return null;
+  const primaryRaw =
+    raw.primary || raw.primaryWindow || raw.primary_window || raw.rate_limit?.primary_window || null;
+  const secondaryRaw =
+    raw.secondary || raw.secondaryWindow || raw.secondary_window || raw.rate_limit?.secondary_window || null;
+  return {
+    limitId: raw.limitId ?? raw.limit_id ?? null,
+    limitName: raw.limitName ?? raw.limit_name ?? null,
+    planType: raw.planType ?? raw.plan_type ?? null,
+    primaryWindow: mapRateLimitWindow(primaryRaw, fetchedAtISO),
+    secondaryWindow: mapRateLimitWindow(secondaryRaw, fetchedAtISO),
+    credits: normalizeCodexCredits(raw.credits || {}),
+    individualLimit: raw.individualLimit || raw.individual_limit || null,
+    rateLimitReachedType: raw.rateLimitReachedType ?? raw.rate_limit_reached_type ?? null
+  };
+}
+
+function normalizeCodexDailyUsageBuckets(rawBuckets) {
+  const buckets = Array.isArray(rawBuckets) ? rawBuckets : [];
+  return buckets
+    .map((bucket) => ({
+      date: String(bucket?.startDate ?? bucket?.start_date ?? bucket?.date ?? "").slice(0, 10),
+      tokens: Number(
+        bucket?.tokens ?? bucket?.totalTokens ?? bucket?.total_tokens ?? bucket?.tokenCount ?? bucket?.token_count ?? 0
+      )
+    }))
+    .filter((bucket) => bucket.date && Number.isFinite(bucket.tokens))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function normalizeCodexTokenUsage(raw) {
+  const holder = raw?.accountTokenUsage || raw?.tokenUsage || raw?.usage || raw || {};
+  const summary = holder.summary || raw?.summary || raw?.token_usage_summary || {};
+  const dailyUsageBuckets = normalizeCodexDailyUsageBuckets(
+    holder.dailyUsageBuckets || holder.daily_usage_buckets || raw?.dailyUsageBuckets || raw?.daily_usage_buckets
+  );
+  const hasSummary = summary && Object.keys(summary).length > 0;
+  if (!hasSummary && dailyUsageBuckets.length === 0) return null;
+  const maxDaily = dailyUsageBuckets.reduce((max, bucket) => Math.max(max, Number(bucket.tokens || 0)), 0);
+  const sumDaily = dailyUsageBuckets.reduce((sum, bucket) => sum + Number(bucket.tokens || 0), 0);
+  return {
+    summary: {
+      lifetimeTokens: Number(summary.lifetimeTokens ?? summary.lifetime_tokens ?? sumDaily ?? 0),
+      peakDailyTokens: Number(summary.peakDailyTokens ?? summary.peak_daily_tokens ?? maxDaily ?? 0),
+      longestRunningTurnSec: Number(summary.longestRunningTurnSec ?? summary.longest_running_turn_sec ?? 0),
+      currentStreakDays: Number(summary.currentStreakDays ?? summary.current_streak_days ?? 0),
+      longestStreakDays: Number(summary.longestStreakDays ?? summary.longest_streak_days ?? 0)
+    },
+    dailyUsageBuckets
+  };
+}
+
+function pickPrimaryCodexLimit(body) {
+  const byLimitId = body?.rateLimitsByLimitId || body?.rate_limits_by_limit_id || null;
+  if (byLimitId && typeof byLimitId === "object") {
+    if (byLimitId.codex) return byLimitId.codex;
+    const entries = Object.values(byLimitId);
+    const named = entries.find((entry) =>
+      /codex/i.test(String(entry?.limitId || entry?.limit_id || entry?.limitName || entry?.limit_name || ""))
+    );
+    if (named) return named;
+    if (entries.length) return entries[0];
+  }
+  const limits = body?.rateLimits || body?.rate_limits || null;
+  if (Array.isArray(limits)) {
+    return (
+      limits.find((entry) =>
+        /codex/i.test(String(entry?.limitId || entry?.limit_id || entry?.limitName || entry?.limit_name || ""))
+      ) || limits[0] || null
+    );
+  }
+  return body?.rateLimits || body?.rate_limits || body?.rate_limit || body;
+}
+
+function normalizeCodexUsageV2Payload(body, fetchedAtISO) {
+  const rawLimit = pickPrimaryCodexLimit(body);
+  const primaryLimit = normalizeCodexLimitSnapshot(rawLimit, fetchedAtISO);
+  const byLimitId = body?.rateLimitsByLimitId || body?.rate_limits_by_limit_id || null;
+  const additionalLimits = byLimitId && typeof byLimitId === "object"
+    ? Object.values(byLimitId).map((limit) => normalizeCodexLimitSnapshot(limit, fetchedAtISO)).filter(Boolean)
+    : [];
+  const tokenUsage = normalizeCodexTokenUsage(body);
+  if (!primaryLimit && !tokenUsage) {
+    throw new Error("Codex usage v2 payload did not include rate limits or token usage.");
+  }
+  return {
+    fetchedAtISO,
+    source: "codex-usage-v2",
+    planType: String(primaryLimit?.planType || body?.planType || body?.plan_type || "-"),
+    allowed: !primaryLimit?.rateLimitReachedType,
+    limitReached: Boolean(primaryLimit?.rateLimitReachedType),
+    limitId: primaryLimit?.limitId || null,
+    limitName: primaryLimit?.limitName || null,
+    rateLimitReachedType: primaryLimit?.rateLimitReachedType || null,
+    primaryWindow: primaryLimit?.primaryWindow || null,
+    secondaryWindow: primaryLimit?.secondaryWindow || null,
+    codeReviewWindow: additionalLimits.find((limit) => /review/i.test(String(limit.limitId || limit.limitName || "")))?.primaryWindow || null,
+    credits: primaryLimit?.credits || normalizeCodexCredits({}),
+    individualLimit: primaryLimit?.individualLimit || null,
+    rateLimits: additionalLimits,
+    tokenUsage
+  };
+}
+
+function normalizeCodexUsageLegacyPayload(body, fetchedAtISO, sourceWarning = "") {
+  return {
+    fetchedAtISO,
+    source: "wham-usage",
+    sourceWarning,
     planType: String(body?.plan_type || "-"),
     allowed: Boolean(body?.rate_limit?.allowed),
     limitReached: Boolean(body?.rate_limit?.limit_reached),
-    primaryWindow: mapRateLimitWindow(body?.rate_limit?.primary_window),
-    secondaryWindow: mapRateLimitWindow(body?.rate_limit?.secondary_window),
-    codeReviewWindow: mapRateLimitWindow(body?.code_review_rate_limit?.primary_window),
-    credits: {
-      hasCredits: Boolean(body?.credits?.has_credits),
-      unlimited: Boolean(body?.credits?.unlimited),
-      balance: String(body?.credits?.balance ?? "0"),
-      approxLocalMessages: Array.isArray(body?.credits?.approx_local_messages) ? body.credits.approx_local_messages : [0, 0],
-      approxCloudMessages: Array.isArray(body?.credits?.approx_cloud_messages) ? body.credits.approx_cloud_messages : [0, 0]
-    }
+    limitId: "codex",
+    limitName: null,
+    rateLimitReachedType: body?.rate_limit_reached_type || null,
+    primaryWindow: mapRateLimitWindow(body?.rate_limit?.primary_window, fetchedAtISO),
+    secondaryWindow: mapRateLimitWindow(body?.rate_limit?.secondary_window, fetchedAtISO),
+    codeReviewWindow: mapRateLimitWindow(body?.code_review_rate_limit?.primary_window, fetchedAtISO),
+    credits: normalizeCodexCredits(body?.credits || {}),
+    individualLimit: body?.spend_control?.individual_limit || null,
+    rateLimits: [],
+    tokenUsage: null
   };
+}
+
+async function getCodexUsagePayload() {
+  const token = getCodexAccessToken();
+  const fetchedAtISO = new Date().toISOString();
+  try {
+    const body = await fetchCodexJson(CODEX_USAGE_V2_ENDPOINT, token);
+    return normalizeCodexUsageV2Payload(body, fetchedAtISO);
+  } catch (error) {
+    const sourceWarning = `v2 unavailable: ${error.message || error}`;
+    const body = await fetchCodexJson(CODEX_USAGE_LEGACY_ENDPOINT, token);
+    return normalizeCodexUsageLegacyPayload(body, fetchedAtISO, sourceWarning);
+  }
 }
 
 function initFirestore() {
@@ -1207,6 +1385,36 @@ function buildCodexWeeklyTimingContext(codexSummary) {
   };
 }
 
+function buildCodexActivityContext(codexSummary) {
+  const tokenUsage = codexSummary?.tokenUsage || null;
+  const dailyRows = Array.isArray(tokenUsage?.dailyUsageBuckets)
+    ? tokenUsage.dailyUsageBuckets
+        .map((row) => ({
+          date: String(row?.date || row?.startDate || "").slice(0, 10),
+          tokens: Number(row?.tokens || 0)
+        }))
+        .filter((row) => row.date && Number.isFinite(row.tokens))
+        .sort((a, b) => a.date.localeCompare(b.date))
+    : [];
+  const sumTokens = (rows) => rows.reduce((sum, row) => sum + Number(row.tokens || 0), 0);
+  const latest = dailyRows[dailyRows.length - 1] || null;
+  const recent7dTokens = sumTokens(dailyRows.slice(-7));
+  const recent14dTokens = sumTokens(dailyRows.slice(-14));
+  const summary = tokenUsage?.summary || {};
+  return {
+    available: Boolean(tokenUsage),
+    latestDate: latest?.date || null,
+    latestDailyTokens: Number(latest?.tokens || 0),
+    recent7dTokens,
+    recent14dTokens,
+    lifetimeTokens: Number(summary.lifetimeTokens || sumTokens(dailyRows) || 0),
+    peakDailyTokens: Number(summary.peakDailyTokens || 0),
+    currentStreakDays: Number(summary.currentStreakDays || 0),
+    longestStreakDays: Number(summary.longestStreakDays || 0),
+    longestRunningTurnSec: Number(summary.longestRunningTurnSec || 0)
+  };
+}
+
 function buildUsageOverviewFallbackSummary({
   firestoreSummary,
   codexSummary,
@@ -1217,6 +1425,7 @@ function buildUsageOverviewFallbackSummary({
   const fsToday = getFirestoreTodaySnapshotFromSummary(firestoreSummary);
   const codexSecondary = codexSummary?.secondaryWindow || null;
   const codexWeeklyTiming = buildCodexWeeklyTimingContext(codexSummary);
+  const codexActivity = buildCodexActivityContext(codexSummary);
   const now = new Date();
   const dayOfMonth = now.getDate();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
@@ -1240,7 +1449,7 @@ function buildUsageOverviewFallbackSummary({
 
   return [
     `total: ¥${Math.round(Number(roughCostSummary?.totalJpy || 0))} / redline ¥3000 に対して ${Number(roughCostSummary?.totalJpy || 0) < 3000 ? "余裕あり" : "注意"}`,
-    `codex: 1w used ${Math.round(Number(codexSecondary?.usedPercent || 0))}%、resetまで約${Math.max(0, Number(codexWeeklyTiming?.hoursUntilWeeklyReset || 0))}h`,
+    `codex: 1w used ${Math.round(Number(codexSecondary?.usedPercent || 0))}%、resetまで約${Math.max(0, Number(codexWeeklyTiming?.hoursUntilWeeklyReset || 0))}h${codexActivity.available ? `、7d ${Math.round(codexActivity.recent7dTokens)} tokens / lifetime ${Math.round(codexActivity.lifetimeTokens)} tokens` : ""}`,
     openaiSummary?.available
       ? `openai: 月末見込み ¥${Math.round(openaiMonthEndJpy)}、現時点 ¥${Math.round(openaiTotalJpy)} (${dayOfMonth}/${daysInMonth})`
       : "openai: 利用額未取得",
@@ -1299,6 +1508,7 @@ async function summarizeUsageOverviewWithOpenAI({
   const fsTrend = computeFirestore14dTrendFromSummary(firestoreSummary);
   const codexSecondary = codexSummary?.secondaryWindow || null;
   const codexWeeklyTiming = buildCodexWeeklyTimingContext(codexSummary);
+  const codexActivity = buildCodexActivityContext(codexSummary);
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
@@ -1354,7 +1564,17 @@ async function summarizeUsageOverviewWithOpenAI({
               usedPercent: Number(codexSecondary?.usedPercent ?? 0),
               remainingPercent: Number(codexSecondary?.remainingPercent ?? 0),
               hoursUntilReset: codexWeeklyTiming?.hoursUntilWeeklyReset ?? null,
-              resetAtISO: codexSecondary?.resetAtISO || null
+              resetAtISO: codexSecondary?.resetAtISO || null,
+              activity: {
+                available: codexActivity.available,
+                latestDate: codexActivity.latestDate,
+                latestDailyTokens: codexActivity.latestDailyTokens,
+                recent7dTokens: codexActivity.recent7dTokens,
+                lifetimeTokens: codexActivity.lifetimeTokens,
+                peakDailyTokens: codexActivity.peakDailyTokens,
+                currentStreakDays: codexActivity.currentStreakDays,
+                longestStreakDays: codexActivity.longestStreakDays
+              }
             },
             openai: {
               available: Boolean(openaiSummary?.available),
@@ -1443,6 +1663,7 @@ async function summarizeUsageOverviewWithGemini({
   const fsTrend = computeFirestore14dTrendFromSummary(firestoreSummary);
   const codexSecondary = codexSummary?.secondaryWindow || null;
   const codexWeeklyTiming = buildCodexWeeklyTimingContext(codexSummary);
+  const codexActivity = buildCodexActivityContext(codexSummary);
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
@@ -1483,7 +1704,17 @@ async function summarizeUsageOverviewWithGemini({
       usedPercent: Number(codexSecondary?.usedPercent ?? 0),
       remainingPercent: Number(codexSecondary?.remainingPercent ?? 0),
       hoursUntilReset: codexWeeklyTiming?.hoursUntilWeeklyReset ?? null,
-      resetAtISO: codexSecondary?.resetAtISO || null
+      resetAtISO: codexSecondary?.resetAtISO || null,
+      activity: {
+        available: codexActivity.available,
+        latestDate: codexActivity.latestDate,
+        latestDailyTokens: codexActivity.latestDailyTokens,
+        recent7dTokens: codexActivity.recent7dTokens,
+        lifetimeTokens: codexActivity.lifetimeTokens,
+        peakDailyTokens: codexActivity.peakDailyTokens,
+        currentStreakDays: codexActivity.currentStreakDays,
+        longestStreakDays: codexActivity.longestStreakDays
+      }
     },
     firestore: {
       today: {

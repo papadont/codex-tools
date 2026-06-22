@@ -1938,6 +1938,17 @@ function getUsageOverviewSummaryKey() {
     codexWeeklyRemaining: Number(
       state.codexUsageSummary?.secondaryWindow?.remainingPercent ?? -1,
     ),
+    codexDailyTokens: Number(
+      USAGE_OVERVIEW_SHARED.getCodexActivitySnapshot(state.codexUsageSummary)
+        .todayTokens || 0,
+    ),
+    codex7dTokens: Number(
+      USAGE_OVERVIEW_SHARED.getCodexActivitySnapshot(state.codexUsageSummary)
+        .recent7dTokens || 0,
+    ),
+    codexLifetimeTokens: Number(
+      state.codexUsageSummary?.tokenUsage?.summary?.lifetimeTokens || 0,
+    ),
     roughUsdMonthly: Number(getRoughMonthlyCostSnapshot().totalUsd || 0),
   });
 }
@@ -2396,12 +2407,19 @@ function buildUsageOverviewPanelItem(options = {}) {
   const persisted = state.persistedUsageOverview;
   if (!Boolean(options.forceRebuild) && persisted?.memoBody) {
     const parsed = parseUsageOverviewMemoBody(persisted.memoBody);
+    const visibleBody =
+      parsed.snapshot &&
+      USAGE_OVERVIEW_SHARED.usageOverviewBodyNeedsCurrentBuild(
+        parsed.visibleBody,
+      )
+        ? buildUsageOverviewBody()
+        : parsed.visibleBody;
     return {
       id: USAGE_OVERVIEW_PANEL_ID,
       projectName: "system",
       memoType: "keep",
       threadTitle: "Usage overview",
-      memoBody: parsed.visibleBody,
+      memoBody: visibleBody,
       createdAtISO: persisted.createdAtISO || "",
       updatedAtISO: persisted.updatedAtISO || "",
     };
@@ -2508,12 +2526,16 @@ function buildCodexUsageBody(summary) {
   const primary = summary.primaryWindow || null;
   const secondary = summary.secondaryWindow || null;
   const codeReview = summary.codeReviewWindow || null;
+  const activity = USAGE_OVERVIEW_SHARED.getCodexActivitySnapshot(summary);
+  const limitLabel = summary.limitName || summary.limitId || "codex";
 
-  return [
+  const lines = [
     `# Codex usage (${summary.planType || "-"})`,
     "",
     `fetched: ${summary.fetchedAtISO || "-"}`,
     `allowed: ${summary.allowed ? "yes" : "no"} / limit reached: ${summary.limitReached ? "yes" : "no"}`,
+    `source: ${summary.source || "-"} / limit: ${limitLabel}`,
+    ...(summary.sourceWarning ? [`note: ${summary.sourceWarning}`] : []),
     "",
     "## Window (chat)",
     "",
@@ -2533,8 +2555,32 @@ function buildCodexUsageBody(summary) {
     `- balance: ${summary.credits?.balance || "0"}`,
     `- approx local messages: ${(summary.credits?.approxLocalMessages || [0, 0]).join(" .. ")}`,
     `- approx cloud messages: ${(summary.credits?.approxCloudMessages || [0, 0]).join(" .. ")}`,
-    ...usageSourceFooterLines(),
-  ].join("\n");
+    "",
+    "## Activity (/usage)",
+    "",
+  ];
+
+  if (activity.available) {
+    lines.push(
+      `- daily: ${formatNumberCompact(activity.todayTokens)} tokens (${activity.latestDate || "-"})`,
+      `- 7d: ${formatNumberCompact(activity.recent7dTokens)} tokens / 14d: ${formatNumberCompact(activity.recent14dTokens)} tokens`,
+      `- lifetime: ${formatNumberCompact(activity.lifetimeTokens)} tokens / peak daily: ${formatNumberCompact(activity.peakDailyTokens)}`,
+      `- streak: current ${activity.currentStreakDays || 0}d / longest ${activity.longestStreakDays || 0}d / longest turn ${formatDuration(activity.longestRunningTurnSec || 0)}`,
+      "",
+      "| date | tokens |",
+      "| --- | ---: |",
+    );
+    for (const row of activity.dailyRowsDesc) {
+      lines.push(`| ${row.date} | ${formatNumberCompact(row.tokens)} |`);
+    }
+  } else {
+    lines.push(
+      "- token history: not exposed in this session; 5h/1w windows above are current",
+    );
+  }
+
+  lines.push(...usageSourceFooterLines());
+  return lines.join("\n");
 }
 
 function buildCodexUsagePanelItem(options = {}) {
@@ -3940,6 +3986,8 @@ function renderList() {
   const storageSnapshot = getStorageSnapshot();
   const openaiSnapshot = getOpenAISnapshot();
   const codexSecondary = state.codexUsageSummary?.secondaryWindow || null;
+  const codexActivity =
+    USAGE_OVERVIEW_SHARED.getCodexActivitySnapshot(state.codexUsageSummary);
   const usageActive = isUsageOverviewPanelSelected();
 
   const row = document.createElement("div");
@@ -4273,7 +4321,7 @@ function renderList() {
         },
       ]),
       summaryHtml: state.codexUsageSummary
-        ? `5h:<strong>${formatPercent(state.codexUsageSummary?.primaryWindow?.remainingPercent, 0)}</strong> - 1w:<strong>${formatPercent(codexSecondary?.remainingPercent, 0)}</strong>`
+        ? `5h:<strong>${formatPercent(state.codexUsageSummary?.primaryWindow?.remainingPercent, 0)}</strong> - 1w:<strong>${formatPercent(codexSecondary?.remainingPercent, 0)}</strong> - 7d:<strong>${formatNumberCompact(codexActivity.recent7dTokens)}</strong>`
         : "",
       summaryText: state.codexUsageSummary
         ? ""
@@ -4281,7 +4329,9 @@ function renderList() {
           ? "error"
           : "loading...",
       dblclickUrl: USAGE_REF_URLS_BY_KEY.codex,
-      titleText: "Double-click to open Codex usage",
+      titleText: state.codexUsageSummary
+        ? `Double-click to open Codex usage | 5h reset ${resetDateText(state.codexUsageSummary?.primaryWindow)} | 1w reset ${resetDateText(codexSecondary)} | daily ${formatNumberCompact(codexActivity.todayTokens)} / 7d ${formatNumberCompact(codexActivity.recent7dTokens)} / lifetime ${formatNumberCompact(codexActivity.lifetimeTokens)}`
+        : "Double-click to open Codex usage",
     }),
   );
   const usageTop = document.createElement("div");

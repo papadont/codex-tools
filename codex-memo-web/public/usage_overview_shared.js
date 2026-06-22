@@ -80,6 +80,58 @@
     return [refsLine.trim(), "", ...lines].join("\n").trimEnd();
   }
 
+  function getCodexActivitySnapshot(codexSummary) {
+    const tokenUsage = codexSummary?.tokenUsage || null;
+    const dailyRows = Array.isArray(tokenUsage?.dailyUsageBuckets)
+      ? tokenUsage.dailyUsageBuckets
+          .map((row) => ({
+            date: String(row?.date || row?.startDate || "").slice(0, 10),
+            tokens: Number(row?.tokens || 0),
+          }))
+          .filter((row) => row.date && Number.isFinite(row.tokens))
+          .sort((a, b) => a.date.localeCompare(b.date))
+      : [];
+    const summary = tokenUsage?.summary || {};
+    const recent7 = dailyRows.slice(-7);
+    const recent14 = dailyRows.slice(-14);
+    const sumTokens = (rows) =>
+      rows.reduce((sum, row) => sum + Number(row.tokens || 0), 0);
+    const latest = dailyRows[dailyRows.length - 1] || null;
+    const peakFromRows = dailyRows.reduce(
+      (peak, row) => Math.max(peak, Number(row.tokens || 0)),
+      0,
+    );
+    const lifetimeFromRows = sumTokens(dailyRows);
+    return {
+      available: Boolean(tokenUsage),
+      latestDate: latest?.date || "",
+      todayTokens: Number(latest?.tokens || 0),
+      recent7dTokens: sumTokens(recent7),
+      recent14dTokens: sumTokens(recent14),
+      lifetimeTokens: Number(summary.lifetimeTokens ?? lifetimeFromRows ?? 0),
+      peakDailyTokens: Number(summary.peakDailyTokens ?? peakFromRows ?? 0),
+      longestRunningTurnSec: Number(summary.longestRunningTurnSec || 0),
+      currentStreakDays: Number(summary.currentStreakDays || 0),
+      longestStreakDays: Number(summary.longestStreakDays || 0),
+      dailyRowsDesc: [...recent14].sort((a, b) =>
+        String(b.date || "").localeCompare(String(a.date || "")),
+      ),
+    };
+  }
+
+  function usageOverviewBodyNeedsCurrentBuild(visibleBody) {
+    const body = String(visibleBody || "");
+    const hasCodexActivityLine =
+      body.includes("activity (/usage)") || body.includes("activity detail:");
+    return (
+      !hasCodexActivityLine ||
+      body.includes("activity (/usage): not available") ||
+      body.includes(
+        "### Codex activity 14d\n\n| date | tokens |\n| --- | ---: |\n| - | - |",
+      )
+    );
+  }
+
   function requireHelper(helpers, name) {
     const fn = helpers?.[name];
     if (typeof fn !== "function") {
@@ -134,6 +186,9 @@
     const openai = openaiSnapshot;
     const codexPrimary = codexSummary?.primaryWindow || null;
     const codexSecondary = codexSummary?.secondaryWindow || null;
+    const codexActivity = getCodexActivitySnapshot(codexSummary);
+    const codexLimitLabel =
+      codexSummary?.limitName || codexSummary?.limitId || "codex";
     const openaiRecentUsd = Number(openaiSummary?.totalUsd14d || 0);
     const openaiRecentJpy = openaiRecentUsd * roughCost.usdToJpy;
     const openaiLineItems14d = formatOpenAILineItems14d(
@@ -169,6 +224,29 @@
       codexSummary
         ? `- next resetまで: ${formatDuration(codexSummary?.secondaryWindow?.resetAfterSeconds || 0)} / used ${boldPercent(codexSecondary?.usedPercent, 0)}`
         : "- next resetまで: -",
+      codexSummary ? `- limit: ${codexLimitLabel}` : "- limit: -",
+    );
+
+    if (codexActivity.available) {
+      lines.push(
+        `- activity (/usage): daily ${formatNumberCompact(codexActivity.todayTokens)} tokens (${codexActivity.latestDate || "-"}) / 7d ${formatNumberCompact(codexActivity.recent7dTokens)} / lifetime ${formatNumberCompact(codexActivity.lifetimeTokens)}`,
+        `- streak: current ${codexActivity.currentStreakDays || 0}d / longest ${codexActivity.longestStreakDays || 0}d / longest turn ${formatDuration(codexActivity.longestRunningTurnSec || 0)}`,
+        "",
+        "### Codex activity 14d",
+        "",
+        "| date | tokens |",
+        "| --- | ---: |",
+      );
+      for (const row of codexActivity.dailyRowsDesc) {
+        lines.push(`| ${row.date} | ${formatNumberCompact(row.tokens)} |`);
+      }
+    } else {
+      lines.push(
+        "- activity detail: token history not exposed in this session; 5h/1w limits above are current",
+      );
+    }
+
+    lines.push(
       "",
       "## OpenAI API",
       "",
@@ -262,6 +340,8 @@
     getUsageRefPageUrls,
     usageSourceFooterLines,
     moveUsageRefsToBodyStart,
+    getCodexActivitySnapshot,
+    usageOverviewBodyNeedsCurrentBuild,
     buildUsageOverviewBody,
   });
 });
