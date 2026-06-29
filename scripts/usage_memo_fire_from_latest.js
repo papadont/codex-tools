@@ -21,6 +21,7 @@ const STATE_PATH = path.join(
   ".memo-trigger-state.json",
 );
 const OPENAI_RESPONSES_ENDPOINT = "https://api.openai.com/v1/responses";
+const GEMINI_GENERATE_CONTENT_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 loadEnvFromCandidates();
 
@@ -248,6 +249,28 @@ function getOpenAIApiKey() {
   return String(
     process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || "",
   ).trim();
+}
+
+function getGeminiApiKey() {
+  return String(
+    process.env.GEMINI_API_KEY ||
+      process.env.GOOGLE_AI_STUDIO_API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      "",
+  ).trim();
+}
+
+function extractGeminiResponseText(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
+  const first = candidates[0] || null;
+  const parts = Array.isArray(first?.content?.parts) ? first.content.parts : [];
+  const chunks = [];
+  for (const part of parts) {
+    const text = typeof part?.text === "string" ? part.text : "";
+    if (text) chunks.push(text);
+  }
+  return chunks.join("\n").trim();
 }
 
 function computeFirestore14dTrend(firestoreSummary) {
@@ -541,10 +564,99 @@ function getUsageOverviewSummaryModel() {
   return value || "gpt-4o-mini";
 }
 
+function normalizeUsageOverviewSummaryProvider(value) {
+  const provider = String(value || "").trim().toLowerCase();
+  return provider === "gemini" ? "gemini" : "openai";
+}
+
+function getUsageOverviewSummaryProvider() {
+  return normalizeUsageOverviewSummaryProvider(
+    process.env.USAGE_OVERVIEW_SUMMARY_PROVIDER,
+  );
+}
+
+function parseModelList(value) {
+  return String(value || "")
+    .split(/[,\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function inferUsageOverviewSummaryProvider(
+  model,
+  fallbackProvider = getUsageOverviewSummaryProvider(),
+) {
+  const raw = String(model || "").trim().toLowerCase();
+  if (/^(models\/)?gemini[-.]/.test(raw)) return "gemini";
+  if (/^(gpt-|o\d|chatgpt-|chat-latest)/.test(raw)) return "openai";
+  return normalizeUsageOverviewSummaryProvider(fallbackProvider);
+}
+
+function parseUsageOverviewSummaryModelSpec(
+  value,
+  fallbackProvider = getUsageOverviewSummaryProvider(),
+) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(openai|gemini)[:/](.+)$/i);
+  if (match) {
+    return {
+      provider: normalizeUsageOverviewSummaryProvider(match[1]),
+      model: match[2].trim(),
+    };
+  }
+  return {
+    provider: inferUsageOverviewSummaryProvider(raw, fallbackProvider),
+    model: raw,
+  };
+}
+
+function formatUsageOverviewSummaryModelSpec(spec) {
+  const provider = normalizeUsageOverviewSummaryProvider(spec?.provider);
+  const model = String(spec?.model || "").trim();
+  return model ? `${provider}:${model}` : provider;
+}
+
+function getUsageOverviewSummaryModelSpecs() {
+  const fallbackProvider = getUsageOverviewSummaryProvider();
+  const rawModels = parseModelList(process.env.USAGE_OVERVIEW_SUMMARY_MODELS);
+  const specs = (rawModels.length ? rawModels : [getUsageOverviewSummaryModel()])
+    .map((model) =>
+      parseUsageOverviewSummaryModelSpec(model, fallbackProvider),
+    )
+    .filter((spec) => spec.model);
+  const seen = new Set();
+  return specs.filter((spec) => {
+    const key = formatUsageOverviewSummaryModelSpec(spec);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function getUsageOverviewSummaryModels() {
+  return getUsageOverviewSummaryModelSpecs().map(formatUsageOverviewSummaryModelSpec);
+}
+
+function getUsageOverviewSummaryModelChainLabel() {
+  return getUsageOverviewSummaryModels().join(" -> ");
+}
+
+function getUsageOverviewSummaryModelsForProvider(provider) {
+  const normalized = normalizeUsageOverviewSummaryProvider(provider);
+  return getUsageOverviewSummaryModelSpecs()
+    .filter((spec) => spec.provider === normalized)
+    .map((spec) => spec.model);
+}
+
+function buildUsageOverviewAiErrorModelLabel(models) {
+  const attempted = Array.isArray(models) ? models.filter(Boolean) : [];
+  if (!attempted.length) return "local-template(ai-error)";
+  return `local-template(ai-error after ${attempted.join(" -> ")})`;
+}
+
 function getUsageOverviewSummaryModelLabel() {
   if (!shouldUseAiUsageOverviewSummary()) return "local-template(mode!=ai)";
-  if (!getOpenAIApiKey()) return "local-template(no-openai-key)";
-  return getUsageOverviewSummaryModel();
+  return getUsageOverviewSummaryModelChainLabel();
 }
 
 async function summarizeUsageOverviewWithOpenAI({
@@ -553,7 +665,7 @@ async function summarizeUsageOverviewWithOpenAI({
   storageSummary,
   openaiSummary,
   roughCostSummary,
-}) {
+}, options = {}) {
   const fallbackSummary = buildUsageOverviewFallbackSummary({
     firestoreSummary,
     codexSummary,
@@ -561,10 +673,17 @@ async function summarizeUsageOverviewWithOpenAI({
     openaiSummary,
     roughCostSummary,
   });
-  if (!shouldUseAiUsageOverviewSummary()) return fallbackSummary;
+  if (!shouldUseAiUsageOverviewSummary()) {
+    return { summary: fallbackSummary, model: "local-template(mode!=ai)" };
+  }
 
   const apiKey = getOpenAIApiKey();
-  if (!apiKey) return fallbackSummary;
+  if (!apiKey) {
+    if (options.fallbackOnError === false) {
+      throw new Error("OPENAI_API_KEY or OPENAI_KEY is not set.");
+    }
+    return { summary: fallbackSummary, model: "local-template(no-openai-key)" };
+  }
 
   const fsToday = getFirestoreTodaySnapshot(firestoreSummary);
   const fsTrend = computeFirestore14dTrend(firestoreSummary);
@@ -683,28 +802,283 @@ async function summarizeUsageOverviewWithOpenAI({
     },
   ];
 
-  const res = await fetch(OPENAI_RESPONSES_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: getUsageOverviewSummaryModel(),
-      input,
-      max_output_tokens: 260,
-    }),
-  });
+  const models = Array.isArray(options.models)
+    ? options.models.filter(Boolean)
+    : getUsageOverviewSummaryModelsForProvider("openai");
+  if (!models.length) {
+    if (options.fallbackOnError === false) {
+      throw new Error("No OpenAI usage overview summary models configured.");
+    }
+    return {
+      summary: fallbackSummary,
+      model: "local-template(no-openai-model)",
+    };
+  }
+  const errors = [];
+  for (const model of models) {
+    try {
+      const res = await fetch(OPENAI_RESPONSES_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          input,
+          max_output_tokens: 260,
+        }),
+      });
 
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok)
-    throw new Error(
-      payload?.error?.message || `OpenAI API error (${res.status})`,
-    );
-  const summary = extractOpenAIResponseText(payload);
-  if (!summary)
-    throw new Error("OpenAI response did not contain summary text.");
-  return normalizeUsageOverviewSummary(summary, fallbackSummary);
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok)
+        throw new Error(
+          payload?.error?.message || `OpenAI API error (${res.status})`,
+        );
+      const summary = extractOpenAIResponseText(payload);
+      if (!summary)
+        throw new Error("OpenAI response did not contain summary text.");
+      return {
+        summary: normalizeUsageOverviewSummary(summary, fallbackSummary),
+        model,
+      };
+    } catch (error) {
+      errors.push(`${model}: ${error?.message || String(error)}`);
+    }
+  }
+  if (errors.length) {
+    console.warn(`[usage-summary] OpenAI summarize fallback: ${errors.join(" | ")}`);
+  }
+  if (options.fallbackOnError === false) {
+    throw new Error(errors.join(" | "));
+  }
+  return {
+    summary: fallbackSummary,
+    model: buildUsageOverviewAiErrorModelLabel(
+      models.map((model) => `openai:${model}`),
+    ),
+  };
+}
+
+async function summarizeUsageOverviewWithGemini({
+  firestoreSummary,
+  codexSummary,
+  storageSummary,
+  openaiSummary,
+  roughCostSummary,
+}, options = {}) {
+  const fallbackSummary = buildUsageOverviewFallbackSummary({
+    firestoreSummary,
+    codexSummary,
+    storageSummary,
+    openaiSummary,
+    roughCostSummary,
+  });
+  if (!shouldUseAiUsageOverviewSummary()) {
+    return { summary: fallbackSummary, model: "local-template(mode!=ai)" };
+  }
+
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
+    if (options.fallbackOnError === false) {
+      throw new Error("GEMINI_API_KEY is not set.");
+    }
+    return { summary: fallbackSummary, model: "local-template(no-gemini-key)" };
+  }
+
+  const fsToday = getFirestoreTodaySnapshot(firestoreSummary);
+  const fsTrend = computeFirestore14dTrend(firestoreSummary);
+  const codexSecondary = codexSummary?.secondaryWindow || null;
+  const codexWeeklyTiming = buildCodexWeeklyTimingContext(codexSummary);
+  const limits = firestoreSummary?.limitsDaily || {};
+  const now = new Date();
+  const dayOfMonth = now.getDate();
+  const daysInMonth = new Date(
+    now.getFullYear(),
+    now.getMonth() + 1,
+    0,
+  ).getDate();
+  const elapsedMonthRatio = dayOfMonth / Math.max(1, daysInMonth);
+  const openaiTotalUsd30d = Number(
+    openaiSummary?.available ? openaiSummary?.totalUsd30d || 0 : 0,
+  );
+  const storagePercent = storageSummary?.estimate?.percentOfNoCost || {};
+  const payloadInput = {
+    totalCost: {
+      roughTotalJpy: Number(Number(roughCostSummary?.totalJpy || 0).toFixed(0)),
+      storageJpy: Number(Number(roughCostSummary?.storageJpy || 0).toFixed(0)),
+      openaiJpy: Number(Number(roughCostSummary?.openaiJpy || 0).toFixed(0)),
+      redlineJpy: 3000,
+    },
+    codex: {
+      planType: codexSummary?.planType || null,
+      usedPercent: Number(codexSecondary?.usedPercent ?? 0),
+      remainingPercent: Number(codexSecondary?.remainingPercent ?? 0),
+      hoursUntilReset: codexWeeklyTiming?.hoursUntilWeeklyReset ?? null,
+      resetAtISO: codexSecondary?.resetAtISO || null,
+    },
+    openai: {
+      available: Boolean(openaiSummary?.available),
+      dayOfMonth,
+      daysInMonth,
+      monthToDateJpy: Number(Number(roughCostSummary?.openaiJpy || 0).toFixed(0)),
+      last14dUsd: Number(Number(openaiSummary?.totalUsd14d || 0).toFixed(3)),
+      projectedMonthEndJpy: openaiSummary?.available
+        ? Number((openaiTotalUsd30d / Math.max(0.001, elapsedMonthRatio)).toFixed(0))
+        : null,
+    },
+    storage: {
+      peakNoCostPercent: Math.max(
+        Number(storagePercent.storage || 0),
+        Number(storagePercent.download || 0),
+        Number(storagePercent.classA || 0),
+        Number(storagePercent.classB || 0),
+      ),
+      roughMonthlyOverageUsd: Number(storageSummary?.estimate?.estimatedMonthlyUsd || 0),
+    },
+    firestore: {
+      limitsDaily: {
+        read: Number(limits.read || 0),
+        write: Number(limits.write || 0),
+        delete: Number(limits.delete || 0),
+      },
+      todayRatePercent: fsToday.ratePercent,
+      trend7d: {
+        read: Number(fsTrend.trend.read.avgRateLast7.toFixed(2)),
+        write: Number(fsTrend.trend.write.avgRateLast7.toFixed(2)),
+        delete: Number(fsTrend.trend.delete.avgRateLast7.toFixed(2)),
+      },
+      max14d: {
+        read: Number(fsTrend.trend.read.maxRate14d.toFixed(2)),
+        write: Number(fsTrend.trend.write.maxRate14d.toFixed(2)),
+        delete: Number(fsTrend.trend.delete.maxRate14d.toFixed(2)),
+      },
+    },
+  };
+  const prompt = [
+    "あなたはクラウドサービス利用状況のアナリストです。",
+    "入力JSONを分析し、日本語の1段落（300-400文字）で要約してください。",
+    "主要メトリクス、コスト異常の兆候、最優先の最適化アクションを含めてください。",
+    "箇条書き、前置き、結論っぽい締めは禁止です。",
+    "Codexは週次リセット前提で、resetまでの時間に必ず触れてください。",
+    "OpenAI usageが取得できている場合は課金発生要因にも触れてください。",
+    "",
+    "INPUT(JSON):",
+    JSON.stringify(payloadInput),
+  ].join("\n");
+
+  const models = Array.isArray(options.models)
+    ? options.models.filter(Boolean)
+    : getUsageOverviewSummaryModelsForProvider("gemini");
+  if (!models.length) {
+    if (options.fallbackOnError === false) {
+      throw new Error("No Gemini usage overview summary models configured.");
+    }
+    return {
+      summary: fallbackSummary,
+      model: "local-template(no-gemini-model)",
+    };
+  }
+  const errors = [];
+  for (const model of models) {
+    try {
+      const res = await fetch(
+        `${GEMINI_GENERATE_CONTENT_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.2 },
+          }),
+        },
+      );
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          payload?.error?.message || `Gemini API error (${res.status})`,
+        );
+      }
+      const summary = extractGeminiResponseText(payload);
+      if (!summary)
+        throw new Error("Gemini response did not contain summary text.");
+      return {
+        summary: normalizeUsageOverviewSummary(summary, fallbackSummary),
+        model,
+      };
+    } catch (error) {
+      errors.push(`${model}: ${error?.message || String(error)}`);
+    }
+  }
+  if (errors.length) {
+    console.warn(`[usage-summary] Gemini summarize fallback: ${errors.join(" | ")}`);
+  }
+  if (options.fallbackOnError === false) {
+    throw new Error(errors.join(" | "));
+  }
+  return {
+    summary: fallbackSummary,
+    model: buildUsageOverviewAiErrorModelLabel(
+      models.map((model) => `gemini:${model}`),
+    ),
+  };
+}
+
+async function summarizeUsageOverview({
+  firestoreSummary,
+  codexSummary,
+  storageSummary,
+  openaiSummary,
+  roughCostSummary,
+}) {
+  const fallbackSummary = buildUsageOverviewFallbackSummary({
+    firestoreSummary,
+    codexSummary,
+    storageSummary,
+    openaiSummary,
+    roughCostSummary,
+  });
+  if (!shouldUseAiUsageOverviewSummary()) {
+    return { summary: fallbackSummary, model: "local-template(mode!=ai)" };
+  }
+
+  const specs = getUsageOverviewSummaryModelSpecs();
+  const errors = [];
+  for (const spec of specs) {
+    const args = {
+      firestoreSummary,
+      codexSummary,
+      storageSummary,
+      openaiSummary,
+      roughCostSummary,
+    };
+    try {
+      if (spec.provider === "gemini") {
+        return await summarizeUsageOverviewWithGemini(args, {
+          models: [spec.model],
+          fallbackOnError: false,
+        });
+      }
+      return await summarizeUsageOverviewWithOpenAI(args, {
+        models: [spec.model],
+        fallbackOnError: false,
+      });
+    } catch (error) {
+      errors.push(
+        `${formatUsageOverviewSummaryModelSpec(spec)}: ${error?.message || String(error)}`,
+      );
+    }
+  }
+  if (errors.length) {
+    console.warn(`[usage-summary] usage overview summarize fallback: ${errors.join(" | ")}`);
+  }
+  return {
+    summary: fallbackSummary,
+    model: buildUsageOverviewAiErrorModelLabel(
+      specs.map(formatUsageOverviewSummaryModelSpec),
+    ),
+  };
 }
 
 function quoteMarkdown(text) {
@@ -801,17 +1175,18 @@ async function main() {
   });
   let usageOverviewSummaryModel = getUsageOverviewSummaryModelLabel();
   try {
-    usageOverviewSummary = await summarizeUsageOverviewWithOpenAI({
+    const result = await summarizeUsageOverview({
       firestoreSummary,
       codexSummary,
       storageSummary,
       openaiSummary,
       roughCostSummary,
     });
-    usageOverviewSummaryModel = getUsageOverviewSummaryModelLabel();
+    usageOverviewSummary = String(result.summary || "").trim();
+    usageOverviewSummaryModel = String(result.model || "").trim() || getUsageOverviewSummaryModelLabel();
   } catch (error) {
     console.warn(
-      `[usage-summary] OpenAI summarize skipped: ${error?.message || String(error)}`,
+      `[usage-summary] usage overview summarize skipped: ${error?.message || String(error)}`,
     );
     usageOverviewSummaryModel = "local-template(ai-error)";
   }
@@ -843,7 +1218,20 @@ async function main() {
   console.log(`Created memo docId=${result.docId} resetAt=${resetAtISO}`);
 }
 
-main().catch((error) => {
-  console.error(error?.stack || error?.message || String(error));
-  process.exit(1);
-});
+module.exports = {
+  buildUsageOverviewAiErrorModelLabel,
+  formatUsageOverviewSummaryModelSpec,
+  getUsageOverviewSummaryModelChainLabel,
+  getUsageOverviewSummaryModelSpecs,
+  getUsageOverviewSummaryModels,
+  inferUsageOverviewSummaryProvider,
+  parseUsageOverviewSummaryModelSpec,
+  summarizeUsageOverview,
+};
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error?.stack || error?.message || String(error));
+    process.exit(1);
+  });
+}

@@ -1475,13 +1475,88 @@ function getUsageOverviewSummaryMode() {
 }
 
 function getUsageOverviewSummaryProvider() {
-  const value = String(process.env.USAGE_OVERVIEW_SUMMARY_PROVIDER || "").trim().toLowerCase();
-  return value || "openai";
+  return normalizeUsageOverviewSummaryProvider(process.env.USAGE_OVERVIEW_SUMMARY_PROVIDER);
 }
 
 function getUsageOverviewSummaryModel() {
   const value = String(process.env.USAGE_OVERVIEW_SUMMARY_MODEL || "").trim();
   return value || "gpt-4o-mini";
+}
+
+function parseModelList(value) {
+  return String(value || "")
+    .split(/[,\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeUsageOverviewSummaryProvider(value) {
+  const provider = String(value || "").trim().toLowerCase();
+  return provider === "gemini" ? "gemini" : "openai";
+}
+
+function inferUsageOverviewSummaryProvider(model, fallbackProvider = getUsageOverviewSummaryProvider()) {
+  const raw = String(model || "").trim().toLowerCase();
+  if (/^(models\/)?gemini[-.]/.test(raw)) return "gemini";
+  if (/^(gpt-|o\d|chatgpt-|chat-latest)/.test(raw)) return "openai";
+  return normalizeUsageOverviewSummaryProvider(fallbackProvider);
+}
+
+function parseUsageOverviewSummaryModelSpec(value, fallbackProvider = getUsageOverviewSummaryProvider()) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(openai|gemini)[:/](.+)$/i);
+  if (match) {
+    return {
+      provider: normalizeUsageOverviewSummaryProvider(match[1]),
+      model: match[2].trim()
+    };
+  }
+  return {
+    provider: inferUsageOverviewSummaryProvider(raw, fallbackProvider),
+    model: raw
+  };
+}
+
+function formatUsageOverviewSummaryModelSpec(spec) {
+  const provider = normalizeUsageOverviewSummaryProvider(spec?.provider);
+  const model = String(spec?.model || "").trim();
+  return model ? `${provider}:${model}` : provider;
+}
+
+function getUsageOverviewSummaryModelSpecs() {
+  const fallbackProvider = getUsageOverviewSummaryProvider();
+  const rawModels = parseModelList(process.env.USAGE_OVERVIEW_SUMMARY_MODELS);
+  const specs = (rawModels.length ? rawModels : [getUsageOverviewSummaryModel()])
+    .map((model) => parseUsageOverviewSummaryModelSpec(model, fallbackProvider))
+    .filter((spec) => spec.model);
+  const seen = new Set();
+  return specs.filter((spec) => {
+    const key = formatUsageOverviewSummaryModelSpec(spec);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function getUsageOverviewSummaryModels() {
+  return getUsageOverviewSummaryModelSpecs().map(formatUsageOverviewSummaryModelSpec);
+}
+
+function getUsageOverviewSummaryModelChainLabel() {
+  return getUsageOverviewSummaryModels().join(" -> ");
+}
+
+function getUsageOverviewSummaryModelsForProvider(provider) {
+  const normalized = normalizeUsageOverviewSummaryProvider(provider);
+  return getUsageOverviewSummaryModelSpecs()
+    .filter((spec) => spec.provider === normalized)
+    .map((spec) => spec.model);
+}
+
+function buildUsageOverviewAiErrorModelLabel(models) {
+  const attempted = Array.isArray(models) ? models.filter(Boolean) : [];
+  if (!attempted.length) return "local-template(ai-error)";
+  return `local-template(ai-error after ${attempted.join(" -> ")})`;
 }
 
 function getMemoSummaryProvider() {
@@ -1501,7 +1576,7 @@ async function summarizeUsageOverviewWithOpenAI({
   storageSummary,
   openaiSummary,
   roughCostSummary
-}) {
+}, options = {}) {
   if (!firestoreSummary || !codexSummary) throw new Error("firestoreSummary and codexSummary are required.");
 
   const fsToday = getFirestoreTodaySnapshotFromSummary(firestoreSummary);
@@ -1526,7 +1601,10 @@ async function summarizeUsageOverviewWithOpenAI({
     openaiSummary,
     roughCostSummary
   });
-  const model = getUsageOverviewSummaryModel();
+  const models = Array.isArray(options.models)
+    ? options.models.filter(Boolean)
+    : getUsageOverviewSummaryModelsForProvider("openai");
+  const fallbackOnError = options.fallbackOnError !== false;
 
   if (!shouldUseAiUsageOverviewSummary()) {
     return { summary: fallbackSummary, model: "local-template(mode!=ai)" };
@@ -1534,6 +1612,7 @@ async function summarizeUsageOverviewWithOpenAI({
 
   const apiKey = getOpenAIApiKey();
   if (!apiKey) {
+    if (!fallbackOnError) throw new Error("OPENAI_API_KEY or OPENAI_KEY is not set.");
     return { summary: fallbackSummary, model: "local-template(no-openai-key)" };
   }
 
@@ -1625,28 +1704,48 @@ async function summarizeUsageOverviewWithOpenAI({
     }
   ];
 
-  const res = await fetch(OPENAI_RESPONSES_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model,
-      input,
-      max_output_tokens: 840  // 文章形式なので220→400に拡張
-    })
-  });
+  const errors = [];
+  for (const model of models) {
+    try {
+      const res = await fetch(OPENAI_RESPONSES_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model,
+          input,
+          max_output_tokens: 840  // 文章形式なので220→400に拡張
+        })
+      });
 
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const message = payload?.error?.message || `OpenAI API error (${res.status})`;
-    throw new Error(message);
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const message = payload?.error?.message || `OpenAI API error (${res.status})`;
+        throw new Error(message);
+      }
+      const summary = extractOpenAIResponseText(payload);
+      if (!String(summary || "").trim()) {
+        throw new Error("OpenAI response did not contain summary text.");
+      }
+      return {
+        summary: normalizeUsageOverviewSummary(summary, fallbackSummary),
+        model
+      };
+    } catch (error) {
+      errors.push(`${model}: ${error?.message || String(error)}`);
+    }
   }
-  const summary = extractOpenAIResponseText(payload);
+  if (errors.length) {
+    console.warn(`[usage-summary] OpenAI summarize fallback: ${errors.join(" | ")}`);
+  }
+  if (!fallbackOnError) {
+    throw new Error(errors.join(" | ") || "No OpenAI usage overview summary models configured.");
+  }
   return {
-    summary: normalizeUsageOverviewSummary(summary, fallbackSummary),
-    model
+    summary: fallbackSummary,
+    model: buildUsageOverviewAiErrorModelLabel(models.map((model) => `openai:${model}`))
   };
 }
 
@@ -1656,7 +1755,7 @@ async function summarizeUsageOverviewWithGemini({
   storageSummary,
   openaiSummary,
   roughCostSummary
-}) {
+}, options = {}) {
   if (!firestoreSummary || !codexSummary) throw new Error("firestoreSummary and codexSummary are required.");
 
   const fsToday = getFirestoreTodaySnapshotFromSummary(firestoreSummary);
@@ -1681,7 +1780,10 @@ async function summarizeUsageOverviewWithGemini({
     openaiSummary,
     roughCostSummary
   });
-  const model = getUsageOverviewSummaryModel();
+  const models = Array.isArray(options.models)
+    ? options.models.filter(Boolean)
+    : getUsageOverviewSummaryModelsForProvider("gemini");
+  const fallbackOnError = options.fallbackOnError !== false;
 
   if (!shouldUseAiUsageOverviewSummary()) {
     return { summary: fallbackSummary, model: "local-template(mode!=ai)" };
@@ -1689,6 +1791,7 @@ async function summarizeUsageOverviewWithGemini({
 
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
+    if (!fallbackOnError) throw new Error("GEMINI_API_KEY is not set.");
     return { summary: fallbackSummary, model: "local-template(no-gemini-key)" };
   }
 
@@ -1753,25 +1856,45 @@ async function summarizeUsageOverviewWithGemini({
     JSON.stringify(payloadInput)
   ].join("\n");
 
-  const res = await fetch(`${GEMINI_GENERATE_CONTENT_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.2 }
-    })
-  });
+  const errors = [];
+  for (const model of models) {
+    try {
+      const res = await fetch(`${GEMINI_GENERATE_CONTENT_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.2 }
+        })
+      });
 
-  const payload = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const message = payload?.error?.message || `Gemini API error (${res.status})`;
-    throw new Error(message);
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const message = payload?.error?.message || `Gemini API error (${res.status})`;
+        throw new Error(message);
+      }
+
+      const summary = extractGeminiResponseText(payload);
+      if (!String(summary || "").trim()) {
+        throw new Error("Gemini response did not contain summary text.");
+      }
+      return {
+        summary: normalizeUsageOverviewSummary(summary, fallbackSummary),
+        model
+      };
+    } catch (error) {
+      errors.push(`${model}: ${error?.message || String(error)}`);
+    }
   }
-
-  const summary = extractGeminiResponseText(payload);
+  if (errors.length) {
+    console.warn(`[usage-summary] Gemini summarize fallback: ${errors.join(" | ")}`);
+  }
+  if (!fallbackOnError) {
+    throw new Error(errors.join(" | ") || "No Gemini usage overview summary models configured.");
+  }
   return {
-    summary: normalizeUsageOverviewSummary(summary, fallbackSummary),
-    model
+    summary: fallbackSummary,
+    model: buildUsageOverviewAiErrorModelLabel(models.map((model) => `gemini:${model}`))
   };
 }
 
@@ -1782,23 +1905,49 @@ async function summarizeUsageOverview({
   openaiSummary,
   roughCostSummary
 }) {
-  const provider = getUsageOverviewSummaryProvider();
-  if (provider === "gemini") {
-    return summarizeUsageOverviewWithGemini({
-      firestoreSummary,
-      codexSummary,
-      storageSummary,
-      openaiSummary,
-      roughCostSummary
-    });
-  }
-  return summarizeUsageOverviewWithOpenAI({
+  const fallbackSummary = buildUsageOverviewFallbackSummary({
     firestoreSummary,
     codexSummary,
     storageSummary,
     openaiSummary,
     roughCostSummary
   });
+  if (!shouldUseAiUsageOverviewSummary()) {
+    return { summary: fallbackSummary, model: "local-template(mode!=ai)" };
+  }
+
+  const specs = getUsageOverviewSummaryModelSpecs();
+  const errors = [];
+  for (const spec of specs) {
+    try {
+      const args = {
+        firestoreSummary,
+        codexSummary,
+        storageSummary,
+        openaiSummary,
+        roughCostSummary
+      };
+      if (spec.provider === "gemini") {
+        return await summarizeUsageOverviewWithGemini(args, {
+          models: [spec.model],
+          fallbackOnError: false
+        });
+      }
+      return await summarizeUsageOverviewWithOpenAI(args, {
+        models: [spec.model],
+        fallbackOnError: false
+      });
+    } catch (error) {
+      errors.push(`${formatUsageOverviewSummaryModelSpec(spec)}: ${error?.message || String(error)}`);
+    }
+  }
+  if (errors.length) {
+    console.warn(`[usage-summary] usage overview summarize fallback: ${errors.join(" | ")}`);
+  }
+  return {
+    summary: fallbackSummary,
+    model: buildUsageOverviewAiErrorModelLabel(specs.map(formatUsageOverviewSummaryModelSpec))
+  };
 }
 
 async function summarizeMemoWithOpenAI({ threadTitle, memoBody }) {
@@ -1950,7 +2099,8 @@ async function main() {
       memoSummaryProvider: getMemoSummaryProvider(),
       memoSummaryModel: getMemoSummaryModel(),
       usageOverviewSummaryProvider: getUsageOverviewSummaryProvider(),
-      usageOverviewSummaryModel: getUsageOverviewSummaryModel(),
+      usageOverviewSummaryModel: getUsageOverviewSummaryModelChainLabel(),
+      usageOverviewSummaryModelChain: getUsageOverviewSummaryModels(),
       hasOpenAiSummaryKey: Boolean(getOpenAIApiKey()),
       hasGeminiSummaryKey: Boolean(getGeminiApiKey())
     });
@@ -2442,7 +2592,19 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  console.error("Failed to start codex-memo web app:", error.message);
-  process.exit(1);
-});
+module.exports = {
+  buildUsageOverviewAiErrorModelLabel,
+  formatUsageOverviewSummaryModelSpec,
+  getUsageOverviewSummaryModelChainLabel,
+  getUsageOverviewSummaryModelSpecs,
+  getUsageOverviewSummaryModels,
+  inferUsageOverviewSummaryProvider,
+  parseUsageOverviewSummaryModelSpec
+};
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error("Failed to start codex-memo web app:", error.message);
+    process.exit(1);
+  });
+}
