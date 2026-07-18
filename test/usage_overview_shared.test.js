@@ -86,7 +86,7 @@ test("marks legacy persisted usage overview bodies for rebuild", () => {
   );
 });
 
-test("keeps current persisted usage overview bodies without rebuild", () => {
+test("rebuilds persisted usage overview bodies that still show the 5h limit", () => {
   const currentBody = [
     refsLine,
     "",
@@ -101,7 +101,53 @@ test("keeps current persisted usage overview bodies without rebuild", () => {
 
   assert.equal(
     UsageOverviewShared.usageOverviewBodyNeedsCurrentBuild(currentBody),
+    true,
+  );
+});
+
+test("keeps weekly-only temporary usage overview bodies without rebuild", () => {
+  const currentBody = [
+    refsLine,
+    "",
+    "rough monthly cost: **¥0** / line ¥3000",
+    "",
+    "## Codex",
+    "",
+    "- 5h limit: temporarily lifted (GPT-5.6 launch measure)",
+    "- 1w remaining: **76%** reset: 2026-06-16T10:00:00.000Z",
+    "- activity detail: token history not exposed in this session; 1w limit above is current (5h temporarily lifted)",
+  ].join("\n");
+
+  assert.equal(
+    UsageOverviewShared.usageOverviewBodyNeedsCurrentBuild(currentBody),
     false,
+  );
+});
+
+test("exposes the temporary weekly-only policy to summary generators", () => {
+  assert.deepEqual(UsageOverviewShared.getCodexLimitPolicy(), {
+    version: "gpt-5.6-weekly-only-temporary-v1",
+    fiveHourLimitStatus: "temporarily_lifted",
+    activeLimitWindow: "1w",
+    reason: "GPT-5.6 launch measure",
+    summaryInstruction:
+      "重要: GPT-5.6開始に伴う一時措置で5h limitは解除中。Codexの残量判断は1w limitのみを使い、5h値は要約に使わない。",
+  });
+});
+
+test("uses a weekly primary window when the temporary API omits secondary", () => {
+  const weekly = {
+    limitWindowSeconds: 604800,
+    remainingPercent: 84,
+    resetAtISO: "2026-07-25T03:35:59.000Z",
+  };
+
+  assert.equal(
+    UsageOverviewShared.getCodexWeeklyWindow({
+      primaryWindow: weekly,
+      secondaryWindow: null,
+    }),
+    weekly,
   );
 });
 
@@ -136,7 +182,7 @@ test("summarizes Codex activity from token usage buckets", () => {
   assert.equal(activity.dailyRowsDesc[0].date, "2026-06-15");
 });
 
-test("keeps Codex reset lines while adding activity to overview body", () => {
+test("shows only the active 1w limit while adding activity to overview body", () => {
   const body = UsageOverviewShared.buildUsageOverviewBody({
     codexSummary: {
       planType: "plus",
@@ -186,28 +232,27 @@ test("keeps Codex reset lines while adding activity to overview body", () => {
     },
   });
 
-  assert.match(body, /- 5h remaining: \*\*82%\*\* reset: 2026-06-15T10:00:00.000Z/);
-  assert.match(body, /- weekly remaining: \*\*76%\*\* reset: 2026-06-16T10:00:00.000Z/);
+  assert.match(body, /- 5h limit: temporarily lifted \(GPT-5\.6 launch measure\)/);
+  assert.match(body, /- 1w remaining: \*\*76%\*\* reset: 2026-06-16T10:00:00.000Z/);
+  assert.match(body, /- 1w resetまで: 7200s \/ used \*\*24%\*\*/);
+  assert.doesNotMatch(body, /- 5h remaining:/);
   assert.match(body, /- activity \(\/usage\): daily 250 tokens \(2026-06-15\) \/ 7d 250 \/ lifetime 1000/);
   assert.match(body, /\| 2026-06-15 \| 250 \|/);
 });
 
-test("keeps Codex reset lines without an empty activity table when token history is unavailable", () => {
+test("keeps the active 1w reset without an empty activity table when token history is unavailable", () => {
   const body = UsageOverviewShared.buildUsageOverviewBody({
     codexSummary: {
       planType: "plus",
       limitId: "codex",
       primaryWindow: {
-        remainingPercent: 58,
-        usedPercent: 42,
-        resetAtISO: "2026-06-17T14:44:00.000Z",
-      },
-      secondaryWindow: {
         remainingPercent: 52,
         usedPercent: 48,
+        limitWindowSeconds: 604800,
         resetAfterSeconds: 68640,
         resetAtISO: "2026-06-18T05:02:00.000Z",
       },
+      secondaryWindow: null,
     },
     firestoreSnapshot: {},
     firestoreActivitySnapshot: {
@@ -239,9 +284,10 @@ test("keeps Codex reset lines without an empty activity table when token history
   });
 
   const codexSection = body.split("\n## OpenAI API\n")[0];
-  assert.match(codexSection, /- 5h remaining: \*\*58%\*\* reset: 2026-06-17T14:44:00.000Z/);
-  assert.match(codexSection, /- weekly remaining: \*\*52%\*\* reset: 2026-06-18T05:02:00.000Z/);
-  assert.match(codexSection, /- activity detail: token history not exposed in this session; 5h\/1w limits above are current/);
+  assert.match(codexSection, /- 5h limit: temporarily lifted \(GPT-5\.6 launch measure\)/);
+  assert.match(codexSection, /- 1w remaining: \*\*52%\*\* reset: 2026-06-18T05:02:00.000Z/);
+  assert.match(codexSection, /- activity detail: token history not exposed in this session; 1w limit above is current \(5h temporarily lifted\)/);
+  assert.doesNotMatch(codexSection, /- 5h remaining:/);
   assert.doesNotMatch(codexSection, /not available/);
   assert.doesNotMatch(codexSection, /Codex activity 14d/);
   assert.doesNotMatch(codexSection, /\| - \| - \|/);

@@ -1917,11 +1917,16 @@ function quoteUsageOverviewSummaryModelLine(modelName) {
 
 function getUsageOverviewSummaryKey() {
   if (!state.usageSummary || !state.codexUsageSummary) return "";
+  const codexWeekly = USAGE_OVERVIEW_SHARED.getCodexWeeklyWindow(
+    state.codexUsageSummary,
+  );
   const fsPerDay = Array.isArray(state.usageSummary.perDay)
     ? state.usageSummary.perDay
     : [];
   const last = fsPerDay[fsPerDay.length - 1] || null;
   return JSON.stringify({
+    codexLimitPolicy:
+      USAGE_OVERVIEW_SHARED.getCodexLimitPolicy().version,
     fsEnd: state.usageSummary.endTime || "",
     fsLastDate: last?.date || "",
     fsLastTotal: Number(last?.total || 0),
@@ -1933,11 +1938,8 @@ function getUsageOverviewSummaryKey() {
     openaiFetched: state.openaiCostsSummary?.fetchedAtISO || "",
     openaiTotalUsd30d: Number(state.openaiCostsSummary?.totalUsd30d || 0),
     codexFetched: state.codexUsageSummary.fetchedAtISO || "",
-    codexWeeklyReset:
-      state.codexUsageSummary?.secondaryWindow?.resetAtISO || "",
-    codexWeeklyRemaining: Number(
-      state.codexUsageSummary?.secondaryWindow?.remainingPercent ?? -1,
-    ),
+    codexWeeklyReset: codexWeekly?.resetAtISO || "",
+    codexWeeklyRemaining: Number(codexWeekly?.remainingPercent ?? -1),
     codexDailyTokens: Number(
       USAGE_OVERVIEW_SHARED.getCodexActivitySnapshot(state.codexUsageSummary)
         .todayTokens || 0,
@@ -2523,8 +2525,12 @@ function buildCodexUsageBody(summary) {
       .join("\n");
   }
 
-  const primary = summary.primaryWindow || null;
-  const secondary = summary.secondaryWindow || null;
+  const limitPolicy = USAGE_OVERVIEW_SHARED.getCodexLimitPolicy();
+  const primary =
+    limitPolicy.fiveHourLimitStatus === "active"
+      ? summary.primaryWindow || null
+      : null;
+  const secondary = USAGE_OVERVIEW_SHARED.getCodexWeeklyWindow(summary);
   const codeReview = summary.codeReviewWindow || null;
   const activity = USAGE_OVERVIEW_SHARED.getCodexActivitySnapshot(summary);
   const limitLabel = summary.limitName || summary.limitId || "codex";
@@ -2539,8 +2545,12 @@ function buildCodexUsageBody(summary) {
     "",
     "## Window (chat)",
     "",
-    `- 5h window used: ${boldPercent(primary?.usedPercent, 1)} / remaining: ${boldPercent(primary?.remainingPercent, 1)}`,
-    `- 5h reset: ${resetDateText(primary)}`,
+    ...(limitPolicy.fiveHourLimitStatus === "temporarily_lifted"
+      ? ["- 5h limit: temporarily lifted (GPT-5.6 launch measure)"]
+      : [
+          `- 5h window used: ${boldPercent(primary?.usedPercent, 1)} / remaining: ${boldPercent(primary?.remainingPercent, 1)}`,
+          `- 5h reset: ${resetDateText(primary)}`,
+        ]),
     `- weekly window used: ${boldPercent(secondary?.usedPercent, 1)} / remaining: ${boldPercent(secondary?.remainingPercent, 1)}`,
     `- weekly reset: ${resetDateText(secondary)}`,
     "",
@@ -2575,7 +2585,9 @@ function buildCodexUsageBody(summary) {
     }
   } else {
     lines.push(
-      "- token history: not exposed in this session; 5h/1w windows above are current",
+      limitPolicy.fiveHourLimitStatus === "temporarily_lifted"
+        ? "- token history: not exposed in this session; 1w window above is current (5h temporarily lifted)"
+        : "- token history: not exposed in this session; 5h/1w windows above are current",
     );
   }
 
@@ -3985,7 +3997,14 @@ function renderList() {
   );
   const storageSnapshot = getStorageSnapshot();
   const openaiSnapshot = getOpenAISnapshot();
-  const codexSecondary = state.codexUsageSummary?.secondaryWindow || null;
+  const codexSecondary = USAGE_OVERVIEW_SHARED.getCodexWeeklyWindow(
+    state.codexUsageSummary,
+  );
+  const codexLimitPolicy = USAGE_OVERVIEW_SHARED.getCodexLimitPolicy();
+  const codexFiveHour =
+    codexLimitPolicy.fiveHourLimitStatus === "active"
+      ? state.codexUsageSummary?.primaryWindow || null
+      : null;
   const codexActivity =
     USAGE_OVERVIEW_SHARED.getCodexActivitySnapshot(state.codexUsageSummary);
   const usageActive = isUsageOverviewPanelSelected();
@@ -4303,15 +4322,17 @@ function renderList() {
         : "-",
       badgePressure: 100 - Number(codexSecondary?.remainingPercent || 0),
       graphEl: makeMiniProgressRows([
-        {
-          label: "5h",
-          value: Number(
-            state.codexUsageSummary?.primaryWindow?.remainingPercent || 0,
-          ),
-          color: "bg-[#ffd792]",
-          bg: "bg-[#826542]",
-          title: `5h ${formatPercent(state.codexUsageSummary?.primaryWindow?.remainingPercent, 0)}`,
-        },
+        ...(codexFiveHour
+          ? [
+              {
+                label: "5h",
+                value: Number(codexFiveHour.remainingPercent || 0),
+                color: "bg-[#ffd792]",
+                bg: "bg-[#826542]",
+                title: `5h ${formatPercent(codexFiveHour.remainingPercent, 0)}`,
+              },
+            ]
+          : []),
         {
           label: "1w",
           value: Number(codexSecondary?.remainingPercent || 0),
@@ -4321,7 +4342,7 @@ function renderList() {
         },
       ]),
       summaryHtml: state.codexUsageSummary
-        ? `5h:<strong>${formatPercent(state.codexUsageSummary?.primaryWindow?.remainingPercent, 0)}</strong> - 1w:<strong>${formatPercent(codexSecondary?.remainingPercent, 0)}</strong> - 7d:<strong>${formatNumberCompact(codexActivity.recent7dTokens)}</strong>`
+        ? `${codexFiveHour ? `5h:<strong>${formatPercent(codexFiveHour.remainingPercent, 0)}</strong> - ` : ""}1w:<strong>${formatPercent(codexSecondary?.remainingPercent, 0)}</strong> - 7d:<strong>${formatNumberCompact(codexActivity.recent7dTokens)}</strong>`
         : "",
       summaryText: state.codexUsageSummary
         ? ""
@@ -4330,7 +4351,7 @@ function renderList() {
           : "loading...",
       dblclickUrl: USAGE_REF_URLS_BY_KEY.codex,
       titleText: state.codexUsageSummary
-        ? `Double-click to open Codex usage | 5h reset ${resetDateText(state.codexUsageSummary?.primaryWindow)} | 1w reset ${resetDateText(codexSecondary)} | daily ${formatNumberCompact(codexActivity.todayTokens)} / 7d ${formatNumberCompact(codexActivity.recent7dTokens)} / lifetime ${formatNumberCompact(codexActivity.lifetimeTokens)}`
+        ? `Double-click to open Codex usage | ${codexFiveHour ? `5h reset ${resetDateText(codexFiveHour)} | ` : ""}1w reset ${resetDateText(codexSecondary)} | daily ${formatNumberCompact(codexActivity.todayTokens)} / 7d ${formatNumberCompact(codexActivity.recent7dTokens)} / lifetime ${formatNumberCompact(codexActivity.lifetimeTokens)}`
         : "Double-click to open Codex usage",
     }),
   );

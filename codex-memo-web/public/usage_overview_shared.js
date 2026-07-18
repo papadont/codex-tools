@@ -7,6 +7,28 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function usageOverviewSharedFactory() {
   "use strict";
 
+  // Temporary GPT-5.6 launch measure. Set this back to false when the 5h limit returns.
+  const CODEX_5H_LIMIT_TEMPORARILY_LIFTED = true;
+  const CODEX_LIMIT_POLICY = Object.freeze(
+    CODEX_5H_LIMIT_TEMPORARILY_LIFTED
+      ? {
+          version: "gpt-5.6-weekly-only-temporary-v1",
+          fiveHourLimitStatus: "temporarily_lifted",
+          activeLimitWindow: "1w",
+          reason: "GPT-5.6 launch measure",
+          summaryInstruction:
+            "重要: GPT-5.6開始に伴う一時措置で5h limitは解除中。Codexの残量判断は1w limitのみを使い、5h値は要約に使わない。",
+        }
+      : {
+          version: "standard-5h-and-1w-v1",
+          fiveHourLimitStatus: "active",
+          activeLimitWindow: "5h_and_1w",
+          reason: "standard limits",
+          summaryInstruction:
+            "重要: Codexは5hと1wの両limitが適用され、週次resetまでの時間に必ず触れる。",
+        },
+  );
+
   const USAGE_REF_LINKS = Object.freeze([
     Object.freeze({
       key: "firestore",
@@ -42,6 +64,23 @@
 
   function getUsageRefPageUrls() {
     return USAGE_REF_LINKS.map((link) => link.url);
+  }
+
+  function getCodexLimitPolicy() {
+    return CODEX_LIMIT_POLICY;
+  }
+
+  function getCodexWeeklyWindow(codexSummary) {
+    const secondary = codexSummary?.secondaryWindow || null;
+    if (secondary) return secondary;
+
+    const primary = codexSummary?.primaryWindow || null;
+    if (!primary) return null;
+    const isWeeklyDuration =
+      Number(primary.limitWindowSeconds || 0) >= 6 * 24 * 60 * 60;
+    return CODEX_5H_LIMIT_TEMPORARILY_LIFTED || isWeeklyDuration
+      ? primary
+      : null;
   }
 
   function formatUsageRefLinks() {
@@ -123,8 +162,14 @@
     const body = String(visibleBody || "");
     const hasCodexActivityLine =
       body.includes("activity (/usage)") || body.includes("activity detail:");
+    const hasCurrentLimitPolicy = CODEX_5H_LIMIT_TEMPORARILY_LIFTED
+      ? body.includes("- 5h limit: temporarily lifted (GPT-5.6 launch measure)") &&
+        body.includes("- 1w remaining:")
+      : body.includes("- 5h remaining:") &&
+        body.includes("- weekly remaining:");
     return (
       !hasCodexActivityLine ||
+      !hasCurrentLimitPolicy ||
       body.includes("activity (/usage): not available") ||
       body.includes(
         "### Codex activity 14d\n\n| date | tokens |\n| --- | ---: |\n| - | - |",
@@ -185,10 +230,31 @@
     const storage = storageSnapshot;
     const openai = openaiSnapshot;
     const codexPrimary = codexSummary?.primaryWindow || null;
-    const codexSecondary = codexSummary?.secondaryWindow || null;
+    const codexSecondary = getCodexWeeklyWindow(codexSummary);
     const codexActivity = getCodexActivitySnapshot(codexSummary);
     const codexLimitLabel =
       codexSummary?.limitName || codexSummary?.limitId || "codex";
+    const codexWindowLines = CODEX_5H_LIMIT_TEMPORARILY_LIFTED
+      ? [
+          "- 5h limit: temporarily lifted (GPT-5.6 launch measure)",
+          codexSummary
+            ? `- 1w remaining: ${boldPercent(codexSecondary?.remainingPercent, 0)} reset: ${formatDate(codexSecondary?.resetAtISO)}`
+            : "- 1w remaining: -",
+          codexSummary
+            ? `- 1w resetまで: ${formatDuration(codexSecondary?.resetAfterSeconds || 0)} / used ${boldPercent(codexSecondary?.usedPercent, 0)}`
+            : "- 1w resetまで: -",
+        ]
+      : [
+          codexSummary
+            ? `- 5h remaining: ${boldPercent(codexPrimary?.remainingPercent, 0)} reset: ${formatDate(codexPrimary?.resetAtISO)}`
+            : "- 5h remaining: -",
+          codexSummary
+            ? `- weekly remaining: ${boldPercent(codexSecondary?.remainingPercent, 0)} reset: ${formatDate(codexSecondary?.resetAtISO)}`
+            : "- weekly remaining: -",
+          codexSummary
+            ? `- next resetまで: ${formatDuration(codexSecondary?.resetAfterSeconds || 0)} / used ${boldPercent(codexSecondary?.usedPercent, 0)}`
+            : "- next resetまで: -",
+        ];
     const openaiRecentUsd = Number(openaiSummary?.totalUsd14d || 0);
     const openaiRecentJpy = openaiRecentUsd * roughCost.usdToJpy;
     const openaiLineItems14d = formatOpenAILineItems14d(
@@ -215,15 +281,12 @@
       "",
       "## Codex",
       "",
-      codexSummary
-        ? `- 5h remaining: ${boldPercent(codexPrimary?.remainingPercent, 0)} reset: ${formatDate(codexPrimary?.resetAtISO)}`
-        : `- status: ${codexError ? `error (${codexError})` : "loading"}`,
-      codexSummary
-        ? `- weekly remaining: ${boldPercent(codexSecondary?.remainingPercent, 0)} reset: ${formatDate(codexSecondary?.resetAtISO)}`
-        : "- weekly remaining: -",
-      codexSummary
-        ? `- next resetまで: ${formatDuration(codexSummary?.secondaryWindow?.resetAfterSeconds || 0)} / used ${boldPercent(codexSecondary?.usedPercent, 0)}`
-        : "- next resetまで: -",
+      ...(codexSummary
+        ? codexWindowLines
+        : [
+            `- status: ${codexError ? `error (${codexError})` : "loading"}`,
+            ...codexWindowLines,
+          ]),
       codexSummary ? `- limit: ${codexLimitLabel}` : "- limit: -",
     );
 
@@ -242,7 +305,9 @@
       }
     } else {
       lines.push(
-        "- activity detail: token history not exposed in this session; 5h/1w limits above are current",
+        CODEX_5H_LIMIT_TEMPORARILY_LIFTED
+          ? "- activity detail: token history not exposed in this session; 1w limit above is current (5h temporarily lifted)"
+          : "- activity detail: token history not exposed in this session; 5h/1w limits above are current",
       );
     }
 
@@ -336,7 +401,10 @@
   }
 
   return Object.freeze({
+    CODEX_5H_LIMIT_TEMPORARILY_LIFTED,
     USAGE_REF_LINKS,
+    getCodexLimitPolicy,
+    getCodexWeeklyWindow,
     getUsageRefPageUrls,
     usageSourceFooterLines,
     moveUsageRefsToBodyStart,

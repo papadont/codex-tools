@@ -474,7 +474,8 @@ function getMonthPaceInfo(baseDate = new Date()) {
 
 function buildCodexWeeklyTimingContext(codexSummary) {
   const fetchedAtISO = codexSummary?.fetchedAtISO || new Date().toISOString();
-  const resetAtISO = codexSummary?.secondaryWindow?.resetAtISO || "";
+  const resetAtISO =
+    UsageOverviewShared.getCodexWeeklyWindow(codexSummary)?.resetAtISO || "";
   const fetched = new Date(fetchedAtISO);
   const reset = new Date(resetAtISO);
   const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -507,8 +508,9 @@ function buildUsageOverviewFallbackSummary({
   roughCostSummary,
 }) {
   const fsToday = getFirestoreTodaySnapshot(firestoreSummary);
-  const codexSecondary = codexSummary?.secondaryWindow || null;
+  const codexSecondary = UsageOverviewShared.getCodexWeeklyWindow(codexSummary);
   const codexWeeklyTiming = buildCodexWeeklyTimingContext(codexSummary);
+  const codexLimitPolicy = UsageOverviewShared.getCodexLimitPolicy();
   const now = new Date();
   const dayOfMonth = now.getDate();
   const daysInMonth = new Date(
@@ -536,7 +538,7 @@ function buildUsageOverviewFallbackSummary({
 
   return [
     `total: ¥${Math.round(Number(roughCostSummary?.totalJpy || 0))} / redline ¥3000 に対して ${Number(roughCostSummary?.totalJpy || 0) < 3000 ? "余裕あり" : "注意"}`,
-    `codex: 1w used ${Math.round(Number(codexSecondary?.usedPercent || 0))}%、resetまで約${Math.max(0, Number(codexWeeklyTiming?.hoursUntilWeeklyReset || 0))}h`,
+    `codex: ${codexLimitPolicy.fiveHourLimitStatus === "temporarily_lifted" ? "5h limit一時解除中（GPT-5.6開始措置）、" : ""}1w used ${Math.round(Number(codexSecondary?.usedPercent || 0))}%、resetまで約${Math.max(0, Number(codexWeeklyTiming?.hoursUntilWeeklyReset || 0))}h`,
     openaiSummary?.available
       ? `openai: 月末見込み ¥${Math.round(openaiMonthEndJpy)}、現時点 ¥${Math.round(openaiTotalJpy)} (${dayOfMonth}/${daysInMonth})`
       : "openai: 利用額未取得",
@@ -687,8 +689,9 @@ async function summarizeUsageOverviewWithOpenAI({
 
   const fsToday = getFirestoreTodaySnapshot(firestoreSummary);
   const fsTrend = computeFirestore14dTrend(firestoreSummary);
-  const codexSecondary = codexSummary?.secondaryWindow || null;
+  const codexSecondary = UsageOverviewShared.getCodexWeeklyWindow(codexSummary);
   const codexWeeklyTiming = buildCodexWeeklyTimingContext(codexSummary);
+  const codexLimitPolicy = UsageOverviewShared.getCodexLimitPolicy();
   const limits = firestoreSummary?.limitsDaily || {};
   const now = new Date();
   const dayOfMonth = now.getDate();
@@ -709,7 +712,7 @@ async function summarizeUsageOverviewWithOpenAI({
       content: [
         {
           type: "input_text",
-          text: "You are a cloud service usage analyst. Analyze the usage data and output a concise Japanese paragraph (300-400 chars). Cover key metrics, cost anomalies, and optimization actions. No bullet points, no intro, no conclusion. 重要事項:codexは1週間周期のリセットを常に意識する。Openaiのusageは再重要事項。課金発生要因について必ず言及すること。",
+          text: `You are a cloud service usage analyst. Analyze the usage data and output a concise Japanese paragraph (300-400 chars). Cover key metrics, cost anomalies, and optimization actions. No bullet points, no intro, no conclusion. ${codexLimitPolicy.summaryInstruction} Openaiのusageは再重要事項。課金発生要因について必ず言及すること。`,
         },
       ],
     },
@@ -734,6 +737,11 @@ async function summarizeUsageOverviewWithOpenAI({
               },
               codex: {
                 planType: codexSummary?.planType || null,
+                limitPolicy: {
+                  fiveHourLimitStatus: codexLimitPolicy.fiveHourLimitStatus,
+                  activeLimitWindow: codexLimitPolicy.activeLimitWindow,
+                  reason: codexLimitPolicy.reason,
+                },
                 usedPercent: Number(codexSecondary?.usedPercent ?? 0),
                 remainingPercent: Number(codexSecondary?.remainingPercent ?? 0),
                 hoursUntilReset:
@@ -888,8 +896,9 @@ async function summarizeUsageOverviewWithGemini({
 
   const fsToday = getFirestoreTodaySnapshot(firestoreSummary);
   const fsTrend = computeFirestore14dTrend(firestoreSummary);
-  const codexSecondary = codexSummary?.secondaryWindow || null;
+  const codexSecondary = UsageOverviewShared.getCodexWeeklyWindow(codexSummary);
   const codexWeeklyTiming = buildCodexWeeklyTimingContext(codexSummary);
+  const codexLimitPolicy = UsageOverviewShared.getCodexLimitPolicy();
   const limits = firestoreSummary?.limitsDaily || {};
   const now = new Date();
   const dayOfMonth = now.getDate();
@@ -912,6 +921,11 @@ async function summarizeUsageOverviewWithGemini({
     },
     codex: {
       planType: codexSummary?.planType || null,
+      limitPolicy: {
+        fiveHourLimitStatus: codexLimitPolicy.fiveHourLimitStatus,
+        activeLimitWindow: codexLimitPolicy.activeLimitWindow,
+        reason: codexLimitPolicy.reason,
+      },
       usedPercent: Number(codexSecondary?.usedPercent ?? 0),
       remainingPercent: Number(codexSecondary?.remainingPercent ?? 0),
       hoursUntilReset: codexWeeklyTiming?.hoursUntilWeeklyReset ?? null,
@@ -960,7 +974,7 @@ async function summarizeUsageOverviewWithGemini({
     "入力JSONを分析し、日本語の1段落（300-400文字）で要約してください。",
     "主要メトリクス、コスト異常の兆候、最優先の最適化アクションを含めてください。",
     "箇条書き、前置き、結論っぽい締めは禁止です。",
-    "Codexは週次リセット前提で、resetまでの時間に必ず触れてください。",
+    codexLimitPolicy.summaryInstruction,
     "OpenAI usageが取得できている場合は課金発生要因にも触れてください。",
     "",
     "INPUT(JSON):",
@@ -1142,7 +1156,8 @@ async function main() {
   const codexSummary = latest?.codexUsage || null;
   const storageSummary = latest?.storageUsage || null;
   const openaiSummary = latest?.openaiCosts || null;
-  const resetAtISO = codexSummary?.secondaryWindow?.resetAtISO || "";
+  const resetAtISO =
+    UsageOverviewShared.getCodexWeeklyWindow(codexSummary)?.resetAtISO || "";
   if (
     !firestoreSummary ||
     !codexSummary ||
