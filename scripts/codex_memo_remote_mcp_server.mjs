@@ -9,6 +9,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createRequire } from "node:module";
 import { registerMemoTools } from "./codex_memo_mcp_core.mjs";
 import { createFirebaseMemoService } from "./codex_memo_mcp_runtime.mjs";
+import { createSitesApiRouter } from "./codex_memo_sites_api.mjs";
 
 const require = createRequire(import.meta.url);
 const { loadEnvFromCandidates } = require("./load_env");
@@ -113,6 +114,7 @@ export function createRemoteMcpApp(options) {
   const {
     memoService,
     apiKey,
+    sitesApiKey = "",
     allowedOrigins = new Set(),
     oauth = null,
     fetchFn = fetch,
@@ -127,6 +129,9 @@ export function createRemoteMcpApp(options) {
   app.use(express.json({ limit: "1mb" }));
 
   app.get(["/health", "/healthz"], (_req, res) => res.json({ ok: true }));
+  if (sitesApiKey) {
+    app.use("/sites-api", createSitesApiRouter({ memoService, apiKey: sitesApiKey, logger }));
+  }
   if (oauth) {
     app.get([
       "/.well-known/oauth-protected-resource",
@@ -259,6 +264,7 @@ export async function startRemoteMcpServer() {
   const app = createRemoteMcpApp({
     memoService: createFirebaseMemoService({ requireBucket: true }),
     apiKey: process.env.CODEX_MEMO_REMOTE_API_KEY,
+    sitesApiKey: process.env.CODEX_MEMO_SITES_API_KEY,
     allowedOrigins: parseAllowedOrigins(process.env.CODEX_MEMO_ALLOWED_ORIGINS),
     oauth: oauthConfigFromEnv(process.env)
   });

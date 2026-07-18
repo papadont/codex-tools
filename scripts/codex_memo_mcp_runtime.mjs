@@ -95,5 +95,13 @@ export function createFirebaseMemoService(options = {}) {
     return { status: "updated", updated: toMemoDto(await ref.get()) };
   };
 
+  memoService.resolveAttachmentUrl = async (memoId, attachment) => {
+    return adapterRegistry.getAdapter("firebase").resolveAttachmentUrl({
+      memoId,
+      attachmentId: attachment.id,
+      attachment
+    });
+  };
+
   return memoService;
 }
