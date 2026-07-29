@@ -271,7 +271,9 @@ Gate B Sites APIの本番反映は
 
 Gate Dのmetadata updateは
 [`docs/codex-memo-gate-d-local-implementation.md`](docs/codex-memo-gate-d-local-implementation.md)
-までローカル実装済み。本番デプロイとproduction write canaryは別承認とする。
+を実装し、
+[`docs/codex-memo-gate-d-production-rollout.md`](docs/codex-memo-gate-d-production-rollout.md)
+の本番デプロイとcontrolled metadata update canaryまで完了した。
 
 ### メモ保存
 ```bash

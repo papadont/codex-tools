@@ -1,10 +1,10 @@
 # codex-memo Gate D local implementation
 
-- Status: Local implementation complete — production approval pending
+- Status: Production deployed and verified
 - Date: 2026-07-30
 - Contract owner: `codex-memo-macos/docs/gate-d-editor-metadata-contract.md`
-- Production deployment: Not performed
-- Production write canary: Not performed
+- Production deployment: `codex-memo-remote-mcp-00014-tat`
+- Production write canary: Passed and cleaned up
 
 Gate D adds optional `projectName` and `memoType` fields to the existing
 conflict-safe `PUT /sites-api/memos/:id` contract. Existing text-only requests
@@ -41,8 +41,9 @@ passes. The tests cover:
 
 The full repository suite must pass before commit.
 
-## Production boundary
+## Production rollout
 
-No Cloud Run deploy, traffic change, Secret change, IAM change, or production
-write is authorized by this local implementation approval. Production rollout
-and a controlled metadata update canary require separate approval.
+The separately approved production rollout and controlled metadata update
+canary completed on 2026-07-30. See
+[`codex-memo-gate-d-production-rollout.md`](codex-memo-gate-d-production-rollout.md).
+No Secret, IAM, ingress, Firebase, Storage, or TTL configuration was changed.
