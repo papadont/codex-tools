@@ -265,6 +265,10 @@ Cloud Runでは`CODEX_MEMO_OAUTH_CLIENT_SECRET`もSecret Managerから渡す。
 Google Cloud Consoleで設定する。初回接続が60秒以内に成立しない場合だけ
 Cloud Runの`min-instances`を`1`へ変更する。
 
+Gate B Sites APIの本番反映は
+[`docs/codex-memo-gate-b-production-rollout.md`](docs/codex-memo-gate-b-production-rollout.md)
+のcandidate deploy、TTL、smoke test、rollback手順に従う。
+
 ### メモ保存
 ```bash
 npm run memo:thread -- --kind "memo" --body "sample"
