@@ -7,7 +7,7 @@ const MAX_ATTACHMENT_COUNT = 5;
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const MAX_MUTATION_ID_BYTES = 200;
 const CAPTURE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const CONTRACT_REVISION = "2026-07-29";
+const CONTRACT_REVISION = "2026-07-30";
 
 const CAPABILITIES = Object.freeze({
   apiVersion: "1",
@@ -17,6 +17,7 @@ const CAPABILITIES = Object.freeze({
     "memo.create": true,
     "memo.create.captureIdempotency": true,
     "memo.updateText.conflictSafe": true,
+    "memo.updateMetadata.conflictSafe": true,
     "attachment.upload.image": true,
     "attachment.mutation.conflictSafe": true,
     "attachment.mutation.idempotent": true,
@@ -107,6 +108,30 @@ function normalizeMemoType(value) {
     });
   }
   return memoType;
+}
+
+function normalizeOptionalProjectName(value) {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value.trim()) {
+    throw Object.assign(new Error("Invalid projectName."), {
+      statusCode: 400,
+      apiCode: "VALIDATION_FAILED",
+      publicMessage: "projectName must be a non-empty string."
+    });
+  }
+  return value.trim();
+}
+
+function normalizeOptionalMemoType(value) {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw Object.assign(new Error("Invalid memoType."), {
+      statusCode: 400,
+      apiCode: "VALIDATION_FAILED",
+      publicMessage: "Invalid memoType."
+    });
+  }
+  return normalizeMemoType(value);
 }
 
 function boolValue(value, fallback = false) {
@@ -318,7 +343,9 @@ export function createSitesApiRouter({ memoService, apiKey, logger = console }) 
     }
     const outcome = await memoService.updateTextMemoIfUnchanged(req.params.id, expectedUpdatedAtISO, {
       memoBody: req.body?.memoBody === undefined ? undefined : String(req.body.memoBody),
-      threadTitle: req.body?.threadTitle === undefined ? undefined : compactText(req.body.threadTitle)
+      threadTitle: req.body?.threadTitle === undefined ? undefined : compactText(req.body.threadTitle),
+      projectName: normalizeOptionalProjectName(req.body?.projectName),
+      memoType: normalizeOptionalMemoType(req.body?.memoType)
     });
     if (outcome.status === "conflict") {
       sendError(res, 409, "UPDATE_CONFLICT", "Update conflict.", {

@@ -671,6 +671,65 @@ test("capture creation is transactionally idempotent and detects payload reuse",
   assert.equal((await memoService.listMemos(10)).length, 0);
 });
 
+test("conflict-safe memo update atomically applies metadata and preserves omissions", async () => {
+  const updatedAtISO = "2026-07-30T00:00:00.000Z";
+  const { memoService } = createServiceContext({
+    docs: {
+      "memo-gate-d": {
+        projectName: "codex-tools",
+        memoType: "memo",
+        memoBody: "base body",
+        threadTitle: "base title",
+        storageKind: "firebase",
+        attachments: [],
+        createdAtISO: updatedAtISO,
+        updatedAtISO
+      }
+    }
+  });
+
+  const first = await memoService.updateTextMemoIfUnchanged(
+    "memo-gate-d",
+    updatedAtISO,
+    {
+      memoBody: "updated body",
+      threadTitle: "updated title",
+      projectName: "codex-memo-macos",
+      memoType: "keep"
+    }
+  );
+  assert.equal(first.status, "updated");
+  assert.equal(first.updated.projectName, "codex-memo-macos");
+  assert.equal(first.updated.memoType, "keep");
+  assert.equal(first.updated.memoBody, "updated body");
+  assert.equal(first.updated.threadTitle, "updated title");
+
+  const second = await memoService.updateTextMemoIfUnchanged(
+    "memo-gate-d",
+    first.updated.updatedAtISO,
+    { memoBody: "text only" }
+  );
+  assert.equal(second.status, "updated");
+  assert.equal(second.updated.projectName, "codex-memo-macos");
+  assert.equal(second.updated.memoType, "keep");
+  assert.equal(second.updated.memoBody, "text only");
+  assert.equal(second.updated.threadTitle, "updated title");
+
+  const conflict = await memoService.updateTextMemoIfUnchanged(
+    "memo-gate-d",
+    "stale",
+    {
+      memoBody: "stale body",
+      threadTitle: "stale title",
+      projectName: "stale-project",
+      memoType: "propomemo"
+    }
+  );
+  assert.equal(conflict.status, "conflict");
+  assert.deepEqual(conflict.current, second.updated);
+  assert.deepEqual(await memoService.getMemo("memo-gate-d"), second.updated);
+});
+
 test("safe attachment mutations replay before checking stale preconditions", async () => {
   const bucket = new FakeBucket();
   const { memoService } = createServiceContext({ docs: {}, bucket });

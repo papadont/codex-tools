@@ -512,6 +512,35 @@ function createMemoService({ db, collection, runtimeConfig, adapterRegistry, adm
     return outcome;
   }
 
+  async function updateTextMemoIfUnchanged(id, expectedUpdatedAtISO, input) {
+    const ref = db.collection(collection).doc(id);
+    const outcome = await db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists) return { status: "missing" };
+      const current = normalizeMemoRecord(snapshot);
+      if (current.storageKind !== "firebase") {
+        return { status: "unsupported", current };
+      }
+      if (String(current.updatedAtISO || "") !== expectedUpdatedAtISO) {
+        return { status: "conflict", current };
+      }
+      const patch = {
+        memoBody: input.memoBody === undefined ? current.memoBody : input.memoBody,
+        threadTitle: input.threadTitle === undefined ? current.threadTitle : input.threadTitle,
+        projectName: input.projectName === undefined ? current.projectName : input.projectName,
+        memoType: input.memoType === undefined ? current.memoType : input.memoType,
+        updatedAtISO: new Date().toISOString()
+      };
+      transaction.update(ref, patch);
+      return { status: "updated" };
+    });
+    if (outcome.status !== "updated") return outcome;
+    return {
+      status: "updated",
+      updated: normalizeMemoRecord(await ref.get())
+    };
+  }
+
   async function updateMemo(id, input) {
     const ref = db.collection(collection).doc(id);
     const exists = await ref.get();
@@ -611,6 +640,7 @@ function createMemoService({ db, collection, runtimeConfig, adapterRegistry, adm
     createMemoForCapture,
     uploadAttachmentIfUnchanged,
     deleteAttachmentIfUnchanged,
+    updateTextMemoIfUnchanged,
     updateMemo,
     deleteMemo
   };

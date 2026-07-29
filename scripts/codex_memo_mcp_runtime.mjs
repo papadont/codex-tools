@@ -73,28 +73,6 @@ export function createFirebaseMemoService(options = {}) {
     toMemoDto
   });
 
-  memoService.updateTextMemoIfUnchanged = async (id, expectedUpdatedAtISO, input) => {
-    const ref = db.collection(COLLECTION).doc(id);
-    const outcome = await db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(ref);
-      if (!snapshot.exists) return { status: "missing" };
-      const current = toMemoDto(snapshot);
-      if (current.storageKind !== "firebase") return { status: "unsupported", current };
-      if (String(current.updatedAtISO || "") !== expectedUpdatedAtISO) {
-        return { status: "conflict", current };
-      }
-      const patch = {
-        memoBody: input.memoBody === undefined ? current.memoBody : input.memoBody,
-        threadTitle: input.threadTitle === undefined ? current.threadTitle : input.threadTitle,
-        updatedAtISO: new Date().toISOString()
-      };
-      transaction.update(ref, patch);
-      return { status: "updated" };
-    });
-    if (outcome.status !== "updated") return outcome;
-    return { status: "updated", updated: toMemoDto(await ref.get()) };
-  };
-
   memoService.resolveAttachmentUrl = async (memoId, attachment) => {
     return adapterRegistry.getAdapter("firebase").resolveAttachmentUrl({
       memoId,

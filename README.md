@@ -269,6 +269,10 @@ Gate B Sites APIの本番反映は
 [`docs/codex-memo-gate-b-production-rollout.md`](docs/codex-memo-gate-b-production-rollout.md)
 のcandidate deploy、TTL、smoke test、rollback手順に従う。
 
+Gate Dのmetadata updateは
+[`docs/codex-memo-gate-d-local-implementation.md`](docs/codex-memo-gate-d-local-implementation.md)
+までローカル実装済み。本番デプロイとproduction write canaryは別承認とする。
+
 ### メモ保存
 ```bash
 npm run memo:thread -- --kind "memo" --body "sample"

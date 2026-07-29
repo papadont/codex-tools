@@ -52,7 +52,10 @@ function createMemoService() {
       const current = items.get(id);
       if (!current) return { status: "missing" };
       if (current.updatedAtISO !== expectedUpdatedAtISO) return { status: "conflict", current: clone(current) };
-      const updated = { ...current, ...input, updatedAtISO: nextTime() };
+      const patch = Object.fromEntries(
+        Object.entries(input).filter(([, value]) => value !== undefined)
+      );
+      const updated = { ...current, ...patch, updatedAtISO: nextTime() };
       items.set(id, updated);
       return { status: "updated", updated: clone(updated) };
     },
@@ -177,7 +180,7 @@ test("Sites API requires its dedicated bearer key and hides storage paths", asyn
   });
 });
 
-test("Sites API advertises the authenticated Gate B capability contract", async () => {
+test("Sites API advertises the authenticated Gate D capability contract", async () => {
   await withServer(async (baseUrl) => {
     const unauthorized = await fetch(`${baseUrl}/capabilities`);
     assert.equal(unauthorized.status, 401);
@@ -187,8 +190,10 @@ test("Sites API advertises the authenticated Gate B capability contract", async 
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.equal(payload.apiVersion, "1");
-    assert.equal(payload.contractRevision, "2026-07-29");
+    assert.equal(payload.contractRevision, "2026-07-30");
     assert.equal(payload.features["memo.create.captureIdempotency"], true);
+    assert.equal(payload.features["memo.updateText.conflictSafe"], true);
+    assert.equal(payload.features["memo.updateMetadata.conflictSafe"], true);
     assert.equal(payload.features["attachment.mutation.conflictSafe"], true);
     assert.equal(payload.features["attachment.mutation.idempotent"], true);
     assert.deepEqual(payload.limits, {
@@ -225,6 +230,104 @@ test("Sites API creates memos and detects update conflicts", async () => {
     });
     assert.equal(updated.status, 200);
     assert.equal((await updated.json()).item.memoBody, "changed");
+  });
+});
+
+test("Sites API atomically updates optional metadata and preserves omitted fields", async () => {
+  await withServer(async (baseUrl) => {
+    const firstResponse = await fetch(`${baseUrl}/memos/memo-1`, {
+      method: "PUT",
+      headers: authHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        expectedUpdatedAtISO: "2026-07-18T00:00:00.000Z",
+        memoBody: "Gate D body",
+        threadTitle: "Gate D title",
+        projectName: "codex-memo-macos",
+        memoType: "handover memo"
+      })
+    });
+    assert.equal(firstResponse.status, 200);
+    const first = (await firstResponse.json()).item;
+    assert.equal(first.projectName, "codex-memo-macos");
+    assert.equal(first.memoType, "handover memo");
+    assert.equal(first.memoBody, "Gate D body");
+    assert.equal(first.threadTitle, "Gate D title");
+
+    const secondResponse = await fetch(`${baseUrl}/memos/memo-1`, {
+      method: "PUT",
+      headers: authHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        expectedUpdatedAtISO: first.updatedAtISO,
+        memoBody: "text only"
+      })
+    });
+    assert.equal(secondResponse.status, 200);
+    const second = (await secondResponse.json()).item;
+    assert.equal(second.projectName, "codex-memo-macos");
+    assert.equal(second.memoType, "handover memo");
+    assert.equal(second.memoBody, "text only");
+    assert.equal(second.threadTitle, "Gate D title");
+  });
+});
+
+test("Sites API rejects invalid metadata before updating the memo", async () => {
+  await withServer(async (baseUrl) => {
+    for (const patch of [
+      { projectName: "   " },
+      { projectName: 42 },
+      { memoType: "unknown" },
+      { memoType: null }
+    ]) {
+      const response = await fetch(`${baseUrl}/memos/memo-1`, {
+        method: "PUT",
+        headers: authHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({
+          expectedUpdatedAtISO: "2026-07-18T00:00:00.000Z",
+          memoBody: "must not persist",
+          ...patch
+        })
+      });
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).code, "VALIDATION_FAILED");
+    }
+
+    const current = await fetch(`${baseUrl}/memos/memo-1`, {
+      headers: authHeaders()
+    });
+    assert.equal(current.status, 200);
+    const memo = (await current.json()).item;
+    assert.equal(memo.projectName, "codex-tools");
+    assert.equal(memo.memoType, "memo");
+    assert.equal(memo.memoBody, "hello");
+  });
+});
+
+test("Sites API stale metadata update leaves every field unchanged", async () => {
+  await withServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/memos/memo-1`, {
+      method: "PUT",
+      headers: authHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        expectedUpdatedAtISO: "stale",
+        memoBody: "stale body",
+        threadTitle: "stale title",
+        projectName: "stale-project",
+        memoType: "keep"
+      })
+    });
+    assert.equal(response.status, 409);
+    const conflict = await response.json();
+    assert.equal(conflict.code, "UPDATE_CONFLICT");
+    assert.equal(conflict.conflict, true);
+    assert.equal(conflict.item.projectName, "codex-tools");
+    assert.equal(conflict.item.memoType, "memo");
+    assert.equal(conflict.item.memoBody, "hello");
+    assert.equal(conflict.item.threadTitle, "First memo");
+
+    const current = await fetch(`${baseUrl}/memos/memo-1`, {
+      headers: authHeaders()
+    });
+    assert.deepEqual((await current.json()).item, conflict.item);
   });
 });
 
