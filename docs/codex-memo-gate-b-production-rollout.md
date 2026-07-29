@@ -94,6 +94,18 @@ controlled write canary:
 canaryのmemo本文、attachment、API keyは記録していない。test memoとStorage objectは削除済み。
 仕様上必要なcapture tombstone 1件と、TTL対象のattachment receipt 2件だけが残る。
 
+## Gate C attachment preview IAM follow-up
+
+2026-07-29のmacOS Host App Gate Cで、attachment resolveが
+`iam.serviceAccounts.signBlob`不足により`500`になることを確認した。
+Cloud Run runtime service account
+`codex-memo-remote-mcp@hush-pointer.iam.gserviceaccount.com`自身へ、
+最小のself-bindingとして`roles/iam.serviceAccountTokenCreator`を追加した。
+
+変更後は同じproduction revision `codex-memo-remote-mcp-00011-sev`でresolveが
+`302`になり、Host Appで画像を表示できた。再デプロイ、Secret変更、
+API contract変更は行っていない。
+
 ## Preflight
 
 ```sh
