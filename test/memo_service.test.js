@@ -18,10 +18,19 @@ function createTimestamp(date) {
 }
 
 function createFirestoreMock(initialDocs = {}) {
-  const docs = new Map(Object.entries(initialDocs).map(([id, data]) => [id, { ...data }]));
+  const collections = new Map([
+    ["codex-memo", new Map(Object.entries(initialDocs).map(([id, data]) => [id, { ...data }]))]
+  ]);
   let idCounter = 0;
+  let transactionTail = Promise.resolve();
 
-  function snapshotFor(id) {
+  function docsFor(collectionName) {
+    if (!collections.has(collectionName)) collections.set(collectionName, new Map());
+    return collections.get(collectionName);
+  }
+
+  function snapshotFor(collectionName, id) {
+    const docs = docsFor(collectionName);
     const data = docs.get(id);
     return {
       id,
@@ -32,8 +41,13 @@ function createFirestoreMock(initialDocs = {}) {
     };
   }
 
-  function queryFor(entries) {
+  function queryFor(collectionName, entries) {
     return {
+      async get() {
+        return {
+          docs: entries.map(([id]) => snapshotFor(collectionName, id))
+        };
+      },
       count() {
         return {
           async get() {
@@ -49,7 +63,7 @@ function createFirestoreMock(initialDocs = {}) {
         return {
           async get() {
             return {
-              docs: entries.map(([id]) => snapshotFor(id))
+              docs: entries.map(([id]) => snapshotFor(collectionName, id))
             };
           }
         };
@@ -58,15 +72,17 @@ function createFirestoreMock(initialDocs = {}) {
   }
 
   return {
-    collection() {
+    collection(collectionName) {
+      const docs = docsFor(collectionName);
       return {
-        ...queryFor(Array.from(docs.entries())),
+        ...queryFor(collectionName, Array.from(docs.entries())),
         doc(id) {
           const docId = id || `doc_${++idCounter}`;
           return {
             id: docId,
+            collectionName,
             async get() {
-              return snapshotFor(docId);
+              return snapshotFor(collectionName, docId);
             },
             async set(payload) {
               docs.set(docId, { ...payload });
@@ -84,10 +100,50 @@ function createFirestoreMock(initialDocs = {}) {
         where(field, operator, value) {
           assert.equal(operator, "==");
           return queryFor(
+            collectionName,
             Array.from(docs.entries()).filter(([, data]) => data[field] === value)
           );
         }
       };
+    },
+    async runTransaction(callback) {
+      const previous = transactionTail;
+      let release;
+      transactionTail = new Promise((resolve) => {
+        release = resolve;
+      });
+      await previous;
+      const operations = [];
+      const transaction = {
+        async get(ref) {
+          return snapshotFor(ref.collectionName, ref.id);
+        },
+        set(ref, payload) {
+          operations.push(["set", ref, payload]);
+        },
+        update(ref, patch) {
+          operations.push(["update", ref, patch]);
+        },
+        delete(ref) {
+          operations.push(["delete", ref]);
+        }
+      };
+      try {
+        const result = await callback(transaction);
+        for (const [operation, ref, value] of operations) {
+          const docs = docsFor(ref.collectionName);
+          if (operation === "set") docs.set(ref.id, { ...value });
+          if (operation === "update") {
+            const current = docs.get(ref.id);
+            if (!current) throw new Error("Document does not exist");
+            docs.set(ref.id, { ...current, ...value });
+          }
+          if (operation === "delete") docs.delete(ref.id);
+        }
+        return result;
+      } finally {
+        release();
+      }
     }
   };
 }
@@ -563,4 +619,135 @@ test("Local storage memos are excluded from visible records", async () => {
   assert.equal(loaded, null);
 
   await fs.rm(root, { recursive: true, force: true });
+});
+
+test("capture creation is transactionally idempotent and detects payload reuse", async () => {
+  const bucket = new FakeBucket();
+  const { memoService } = createServiceContext({ docs: {}, bucket });
+  const input = {
+    projectName: "codex-memo-macos",
+    memoType: "memo",
+    memoBody: "captured once",
+    threadTitle: "capture",
+    storageKind: "firebase",
+    attachments: [],
+    deletable: false,
+    pinned: false,
+    createdBy: "codex-memo-sites",
+    sourceThread: "chatgpt-sites"
+  };
+
+  const [first, second] = await Promise.all([
+    memoService.createMemoForCapture({
+      captureID: "11111111-1111-4111-8111-111111111111",
+      fingerprint: "same-fingerprint",
+      input
+    }),
+    memoService.createMemoForCapture({
+      captureID: "11111111-1111-4111-8111-111111111111",
+      fingerprint: "same-fingerprint",
+      input
+    })
+  ]);
+
+  assert.deepEqual([first.status, second.status].sort(), ["created", "replayed"]);
+  assert.equal(first.memo.id, second.memo.id);
+  assert.equal((await memoService.listMemos(10)).length, 1);
+
+  const reused = await memoService.createMemoForCapture({
+    captureID: "11111111-1111-4111-8111-111111111111",
+    fingerprint: "different-fingerprint",
+    input: { ...input, memoBody: "different" }
+  });
+  assert.equal(reused.status, "reused");
+
+  assert.equal(await memoService.deleteMemo(first.memo.id), true);
+  const afterDeletion = await memoService.createMemoForCapture({
+    captureID: "11111111-1111-4111-8111-111111111111",
+    fingerprint: "same-fingerprint",
+    input
+  });
+  assert.equal(afterDeletion.status, "gone");
+  assert.equal((await memoService.listMemos(10)).length, 0);
+});
+
+test("safe attachment mutations replay before checking stale preconditions", async () => {
+  const bucket = new FakeBucket();
+  const { memoService } = createServiceContext({ docs: {}, bucket });
+  const memo = await memoService.createMemo({
+    projectName: "codex-memo-macos",
+    memoType: "memo",
+    memoBody: "body",
+    threadTitle: "attachments",
+    storageKind: "firebase",
+    attachments: []
+  });
+  const uploadInput = {
+    memoId: memo.id,
+    mutationID: "upload-queue-item-1",
+    fingerprint: "upload-fingerprint",
+    expectedUpdatedAtISO: memo.updatedAtISO,
+    attachmentId: "att_safe",
+    fileName: "safe.png",
+    mimeType: "image/png",
+    bytes: Buffer.from("safe image"),
+    caption: "safe",
+    maxAttachmentCount: 5
+  };
+
+  const [first, second] = await Promise.all([
+    memoService.uploadAttachmentIfUnchanged(uploadInput),
+    memoService.uploadAttachmentIfUnchanged(uploadInput)
+  ]);
+  assert.deepEqual([first.status, second.status].sort(), ["replayed", "updated"]);
+  assert.equal(first.current.attachments.length, 1);
+  assert.equal(second.current.attachments.length, 1);
+  assert.equal(bucket.objects.size, 1);
+
+  const replayedUpload = await memoService.uploadAttachmentIfUnchanged({
+    ...uploadInput,
+    expectedUpdatedAtISO: "stale"
+  });
+  assert.equal(replayedUpload.status, "replayed");
+
+  const reusedUpload = await memoService.uploadAttachmentIfUnchanged({
+    ...uploadInput,
+    fingerprint: "different-upload-fingerprint"
+  });
+  assert.equal(reusedUpload.status, "reused");
+
+  const staleUpload = await memoService.uploadAttachmentIfUnchanged({
+    ...uploadInput,
+    mutationID: "upload-queue-item-2",
+    fingerprint: "second-upload-fingerprint",
+    attachmentId: "att_safe_2",
+    expectedUpdatedAtISO: "stale"
+  });
+  assert.equal(staleUpload.status, "conflict");
+
+  const current = await memoService.getMemo(memo.id);
+  const deleteInput = {
+    memoId: memo.id,
+    attachmentId: "att_safe",
+    mutationID: "delete-queue-item-1",
+    fingerprint: "delete-fingerprint",
+    expectedUpdatedAtISO: current.updatedAtISO
+  };
+  const deleted = await memoService.deleteAttachmentIfUnchanged(deleteInput);
+  assert.equal(deleted.status, "updated");
+  assert.equal(deleted.current.attachments.length, 0);
+  assert.equal(bucket.objects.size, 0);
+
+  const replayedDelete = await memoService.deleteAttachmentIfUnchanged({
+    ...deleteInput,
+    expectedUpdatedAtISO: "stale"
+  });
+  assert.equal(replayedDelete.status, "replayed");
+  assert.equal(replayedDelete.current.attachments.length, 0);
+
+  const reusedDelete = await memoService.deleteAttachmentIfUnchanged({
+    ...deleteInput,
+    fingerprint: "different-delete-fingerprint"
+  });
+  assert.equal(reusedDelete.status, "reused");
 });

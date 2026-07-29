@@ -1,9 +1,45 @@
 "use strict";
 
+const { createHash } = require("node:crypto");
 const { normalizeStorageKind } = require("./runtime_config");
 const { normalizeAttachments, syncMemoBodyAndAttachments } = require("./memo_sync_service");
 
 function createMemoService({ db, collection, runtimeConfig, adapterRegistry, admin, toMemoDto }) {
+  const sitesIdempotencyCollection = `${collection}-sites-idempotency-v1`;
+
+  function sitesReceiptId(kind, key) {
+    return createHash("sha256").update(`${kind}\0${key}`).digest("hex");
+  }
+
+  function attachmentReference(attachmentId, caption) {
+    const label = String(caption || "").trim().replace(/[\[\]]/g, "") || "image";
+    return `![${label}](attachment://${attachmentId})`;
+  }
+
+  function removeAttachmentReference(memoBody, attachmentId) {
+    const escapedId = String(attachmentId).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`!?\\[[^\\]]*\\]\\(attachment:\/\/${escapedId}\\)[ \\t]*(?:\\r?\\n)?`, "g");
+    return String(memoBody || "").replace(pattern, "").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  function memoPayload(input, storageKind, now) {
+    return {
+      projectName: input.projectName,
+      memoType: input.memoType,
+      memoBody: String(input.memoBody || ""),
+      threadTitle: input.threadTitle,
+      deletable: Boolean(input.deletable),
+      pinned: Boolean(input.pinned),
+      storageKind,
+      attachments: normalizePersistedAttachments(input.attachments),
+      datetime: admin.firestore.Timestamp.fromDate(now),
+      createdAtISO: now.toISOString(),
+      updatedAtISO: now.toISOString(),
+      createdBy: input.createdBy || "codex-memo-web",
+      sourceThread: input.sourceThread || process.cwd()
+    };
+  }
+
   function normalizeStorageKindLoose(raw, fallback = "firebase") {
     try {
       return normalizeStorageKind(raw, fallback);
@@ -231,25 +267,249 @@ function createMemoService({ db, collection, runtimeConfig, adapterRegistry, adm
       attachments: input.attachments,
       previousAttachments: []
     });
-    const payload = {
-      projectName: input.projectName,
-      memoType: input.memoType,
+    const payload = memoPayload({
+      ...input,
       memoBody: persistResult.normalizedBody,
-      threadTitle: input.threadTitle,
-      deletable: Boolean(input.deletable),
-      pinned: Boolean(input.pinned),
-      storageKind,
-      attachments: persistResult.attachments,
-      datetime: admin.firestore.Timestamp.fromDate(now),
-      createdAtISO: now.toISOString(),
-      updatedAtISO: now.toISOString(),
-      createdBy: input.createdBy || "codex-memo-web",
-      sourceThread: input.sourceThread || process.cwd()
-    };
+      attachments: persistResult.attachments
+    }, storageKind, now);
 
     await ref.set(payload);
     const created = await ref.get();
     return normalizeMemoRecord(created);
+  }
+
+  async function createMemoForCapture({ captureID, fingerprint, input }) {
+    const storageKind = resolveCreateStorageKind(input.storageKind);
+    assertAllowedStorageKind(storageKind);
+    const syncResult = syncMemoBodyAndAttachments({
+      memoBody: input.memoBody,
+      attachments: input.attachments
+    });
+    if (syncResult.duplicateAttachmentIds.length > 0 || syncResult.missingAttachmentIds.length > 0) {
+      throw new Error("Capture memo attachments are invalid.");
+    }
+
+    const receiptId = sitesReceiptId("capture", captureID);
+    const memoId = `sites_${receiptId.slice(0, 32)}`;
+    const receiptRef = db.collection(sitesIdempotencyCollection).doc(receiptId);
+    const memoRef = db.collection(collection).doc(memoId);
+    const now = new Date();
+    const payload = memoPayload({
+      ...input,
+      memoBody: syncResult.normalizedBody,
+      attachments: syncResult.attachments
+    }, storageKind, now);
+
+    const outcome = await db.runTransaction(async (transaction) => {
+      const [receipt, memo] = await Promise.all([
+        transaction.get(receiptRef),
+        transaction.get(memoRef)
+      ]);
+      if (receipt.exists) {
+        const data = receipt.data() || {};
+        if (data.fingerprint !== fingerprint) return { status: "reused" };
+        if (!memo.exists) return { status: "gone" };
+        return { status: "replayed" };
+      }
+      if (memo.exists) return { status: "reused" };
+      transaction.set(memoRef, payload);
+      transaction.set(receiptRef, {
+        kind: "capture",
+        keyHash: receiptId,
+        fingerprint,
+        memoId,
+        status: "success",
+        createdAtISO: now.toISOString()
+      });
+      return { status: "created" };
+    });
+
+    if (outcome.status === "reused" || outcome.status === "gone") return outcome;
+    const memo = await memoRef.get();
+    if (!memo.exists) return { status: "gone" };
+    return {
+      status: outcome.status,
+      memo: normalizeMemoRecord(memo)
+    };
+  }
+
+  async function clearPendingAttachmentReceipt(receiptRef, fingerprint) {
+    await db.runTransaction(async (transaction) => {
+      const receipt = await transaction.get(receiptRef);
+      if (!receipt.exists) return;
+      const data = receipt.data() || {};
+      if (data.status === "pending" && data.fingerprint === fingerprint) {
+        transaction.delete(receiptRef);
+      }
+    });
+  }
+
+  async function uploadAttachmentIfUnchanged(input) {
+    const memoRef = db.collection(collection).doc(input.memoId);
+    const receiptId = sitesReceiptId("attachment", `${input.memoId}\0${input.mutationID}`);
+    const receiptRef = db.collection(sitesIdempotencyCollection).doc(receiptId);
+    const attachmentId = input.attachmentId;
+
+    const preflight = await db.runTransaction(async (transaction) => {
+      const [receipt, memo] = await Promise.all([
+        transaction.get(receiptRef),
+        transaction.get(memoRef)
+      ]);
+      if (receipt.exists) {
+        const data = receipt.data() || {};
+        if (data.fingerprint !== input.fingerprint) return { status: "reused" };
+        if (!memo.exists) return { status: "missing" };
+        if (data.status === "success") {
+          return { status: "replayed", current: normalizeMemoRecord(memo) };
+        }
+        return { status: "pending" };
+      }
+      if (!memo.exists) return { status: "missing" };
+      const current = normalizeMemoRecord(memo);
+      if (current.storageKind !== "firebase") return { status: "missing" };
+      if (String(current.updatedAtISO || "") !== input.expectedUpdatedAtISO) {
+        return { status: "conflict", current };
+      }
+      if (current.attachments.length >= input.maxAttachmentCount) {
+        return { status: "limit", current };
+      }
+      transaction.set(receiptRef, {
+        kind: "attachment.upload",
+        keyHash: receiptId,
+        fingerprint: input.fingerprint,
+        memoId: input.memoId,
+        attachmentId,
+        expectedUpdatedAtISO: input.expectedUpdatedAtISO,
+        status: "pending",
+        createdAtISO: new Date().toISOString()
+      });
+      return { status: "pending" };
+    });
+
+    if (preflight.status !== "pending") {
+      if (preflight.status === "replayed") {
+        const attachment = preflight.current.attachments.find((item) => item.id === attachmentId);
+        if (!attachment) return { status: "reused" };
+      }
+      return preflight;
+    }
+
+    const adapter = adapterRegistry.getAdapter("firebase");
+    let savedAttachment;
+    try {
+      savedAttachment = await adapter.saveAttachment({
+        memoId: input.memoId,
+        attachmentId,
+        kind: "image",
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+        bytes: input.bytes,
+        caption: input.caption
+      });
+    } catch (error) {
+      await clearPendingAttachmentReceipt(receiptRef, input.fingerprint);
+      throw error;
+    }
+
+    const finalized = await db.runTransaction(async (transaction) => {
+      const [receipt, memo] = await Promise.all([
+        transaction.get(receiptRef),
+        transaction.get(memoRef)
+      ]);
+      if (!receipt.exists) return { status: "conflict" };
+      const receiptData = receipt.data() || {};
+      if (receiptData.fingerprint !== input.fingerprint) return { status: "reused" };
+      if (!memo.exists) {
+        transaction.delete(receiptRef);
+        return { status: "missing" };
+      }
+      const current = normalizeMemoRecord(memo);
+      if (receiptData.status === "success") return { status: "replayed", current };
+      if (String(current.updatedAtISO || "") !== input.expectedUpdatedAtISO) {
+        transaction.delete(receiptRef);
+        return { status: "conflict", current };
+      }
+      if (current.attachments.length >= input.maxAttachmentCount) {
+        transaction.delete(receiptRef);
+        return { status: "limit", current };
+      }
+      const reference = attachmentReference(attachmentId, input.caption);
+      const memoBody = `${String(current.memoBody || "").trim()}${current.memoBody ? "\n\n" : ""}${reference}`;
+      const attachments = normalizePersistedAttachments([...current.attachments, savedAttachment]);
+      const updatedAtISO = new Date().toISOString();
+      transaction.update(memoRef, { memoBody, attachments, updatedAtISO });
+      transaction.set(receiptRef, {
+        ...receiptData,
+        status: "success",
+        completedAtISO: updatedAtISO
+      });
+      return { status: "updated" };
+    });
+
+    if (["conflict", "missing", "limit", "reused"].includes(finalized.status)) {
+      await adapter.deleteAttachment(input.memoId, attachmentId);
+      return finalized;
+    }
+    if (finalized.status === "replayed") {
+      return finalized;
+    }
+    const updated = await memoRef.get();
+    return {
+      status: "updated",
+      current: normalizeMemoRecord(updated)
+    };
+  }
+
+  async function deleteAttachmentIfUnchanged(input) {
+    const memoRef = db.collection(collection).doc(input.memoId);
+    const receiptId = sitesReceiptId("attachment", `${input.memoId}\0${input.mutationID}`);
+    const receiptRef = db.collection(sitesIdempotencyCollection).doc(receiptId);
+    const outcome = await db.runTransaction(async (transaction) => {
+      const [receipt, memo] = await Promise.all([
+        transaction.get(receiptRef),
+        transaction.get(memoRef)
+      ]);
+      if (receipt.exists) {
+        const data = receipt.data() || {};
+        if (data.fingerprint !== input.fingerprint) return { status: "reused" };
+        if (!memo.exists) return { status: "missing" };
+        if (data.status === "success") {
+          return { status: "replayed", current: normalizeMemoRecord(memo) };
+        }
+      }
+      if (!memo.exists) return { status: "missing" };
+      const current = normalizeMemoRecord(memo);
+      if (current.storageKind !== "firebase") return { status: "missing" };
+      if (String(current.updatedAtISO || "") !== input.expectedUpdatedAtISO) {
+        return { status: "conflict", current };
+      }
+      if (!current.attachments.some((item) => item.id === input.attachmentId)) {
+        return { status: "attachment-missing", current };
+      }
+      const attachments = current.attachments.filter((item) => item.id !== input.attachmentId);
+      const memoBody = removeAttachmentReference(current.memoBody, input.attachmentId);
+      const updatedAtISO = new Date().toISOString();
+      transaction.update(memoRef, { memoBody, attachments, updatedAtISO });
+      transaction.set(receiptRef, {
+        kind: "attachment.delete",
+        keyHash: receiptId,
+        fingerprint: input.fingerprint,
+        memoId: input.memoId,
+        attachmentId: input.attachmentId,
+        status: "success",
+        createdAtISO: updatedAtISO
+      });
+      return { status: "updated" };
+    });
+
+    if (outcome.status === "updated" || outcome.status === "replayed") {
+      await adapterRegistry.getAdapter("firebase").deleteAttachment(input.memoId, input.attachmentId);
+    }
+    if (outcome.status === "updated") {
+      const updated = await memoRef.get();
+      return { status: "updated", current: normalizeMemoRecord(updated) };
+    }
+    return outcome;
   }
 
   async function updateMemo(id, input) {
@@ -320,6 +580,22 @@ function createMemoService({ db, collection, runtimeConfig, adapterRegistry, adm
     const adapter = adapterRegistry.getAdapter(current.storageKind);
     await adapter.deleteMemo(id);
     await db.collection(collection).doc(id).delete();
+    const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+    await db.collection(sitesIdempotencyCollection)
+      .where("memoId", "==", id)
+      .get()
+      .then((snapshot) => Promise.all(snapshot.docs.map(async (doc) => {
+        const receipt = doc.data() || {};
+        if (!String(receipt.kind || "").startsWith("attachment.")) return;
+        await db.collection(sitesIdempotencyCollection).doc(doc.id).update({
+          memoDeletedAtISO: new Date().toISOString(),
+          expiresAt: admin.firestore.Timestamp.fromDate(expiresAt),
+          expiresAtISO: expiresAt.toISOString()
+        });
+      })))
+      .catch((error) => {
+        console.warn(`[memo_service] failed to mark attachment receipts for ${id}: ${error.message}`);
+      });
     return true;
   }
 
@@ -332,6 +608,9 @@ function createMemoService({ db, collection, runtimeConfig, adapterRegistry, adm
     countMemosByStorageKind,
     getMemo,
     createMemo,
+    createMemoForCapture,
+    uploadAttachmentIfUnchanged,
+    deleteAttachmentIfUnchanged,
     updateMemo,
     deleteMemo
   };
