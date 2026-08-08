@@ -6,6 +6,7 @@
   "main": "scripts/save_firestore_memo.js",
   "scripts": {
     "app:build": "apps/codex-tools-menubar/build.sh",
+    "app:install:release": "apps/codex-tools-menubar/install_release.sh",
     "app:build:legacy-dual": "apps/legacy-dual-launcher/build.sh",
     "test": "node --test test/*.test.js test/*.test.mjs",
     "memo:save": "node scripts/save_firestore_memo.js",

@@ -109,7 +109,7 @@ API contract変更は行っていない。
 ## Preflight
 
 ```sh
-cd /Users/hideki/Documents/develop/codex-tools
+cd /Users/hideki/dev/codex-tools
 
 test -z "$(git status --porcelain)"
 TARGET_IMPLEMENTATION_REVISION="2e1bfa28313298c93bc03c4d5fc6f6c91a1314c5"

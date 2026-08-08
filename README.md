@@ -46,7 +46,7 @@ dist/
 
 ## セットアップ
 ```bash
-cd "$HOME/Documents/develop/codex-tools"
+cd "$HOME/dev/codex-tools"
 npm install
 ```
 
@@ -94,8 +94,15 @@ Firebase Storage をまだ有効化していない場合:
 ### アプリ
 ```bash
 npm run app:build
-open "$HOME/Documents/develop/codex-tools/dist/macos-launchers/codex-tools.app"
+open "$HOME/dev/codex-tools/dist/macos-launchers/codex-tools.app"
 ```
+
+ローカル利用向けの署名済みRelease版を `~/Applications/codex-tools.app` へ配置する:
+```bash
+npm run app:install:release
+```
+
+既定ではキーチェーンの `Apple Development` 証明書を使う。別の証明書を明示する場合は `CODE_SIGN_IDENTITY` を指定する。
 
 ### codex-memo Web
 ```bash
@@ -133,7 +140,7 @@ MCP client 設定例:
     "codex-memo": {
       "command": "npm",
       "args": ["run", "memo:mcp", "--silent"],
-      "cwd": "/Users/hideki/Documents/develop/codex-tools",
+      "cwd": "/Users/hideki/dev/codex-tools",
       "env": {
         "GOOGLE_APPLICATION_CREDENTIALS": "/Users/hideki/.config/gcp/codex-tools-firestore-sa.json"
       }
@@ -350,11 +357,11 @@ npm run firestore:usage
 
 ## 既存プロジェクトへのルール追記
 ```bash
-"$HOME/Documents/develop/codex-tools/scripts/setup_project_memo_rule.sh" /absolute/path/to/project
+"$HOME/dev/codex-tools/scripts/setup_project_memo_rule.sh" /absolute/path/to/project
 ```
 
 ## グローバル導入
 ```bash
-"$HOME/Documents/develop/codex-tools/scripts/install_global_memo_tool.sh"
+"$HOME/dev/codex-tools/scripts/install_global_memo_tool.sh"
 export PATH="$HOME/.codex/bin:$PATH"
 ```

@@ -19,13 +19,13 @@ macOS の Share Extension から `codex-memo` へ送り込むための共有導�
 
 ## 生成
 ```bash
-cd "/Users/hideki/Documents/develop/codex-tools/apps/codex-memo-share-macos"
+cd "/Users/hideki/dev/codex-tools/apps/codex-memo-share-macos"
 xcodegen generate
 ```
 
 ## ビルド
 ```bash
-cd "/Users/hideki/Documents/develop/codex-tools/apps/codex-memo-share-macos"
+cd "/Users/hideki/dev/codex-tools/apps/codex-memo-share-macos"
 ./build.sh
 ```
 
