@@ -12,9 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var currentMemoLaunchMode = "mixed"
 
   private let homeDir = NSHomeDirectory()
-  private lazy var hushDir = "\(homeDir)/Documents/develop/hush-pointer"
+  private lazy var hushDir = "\(homeDir)/dev/hush-pointer"
   private lazy var codexToolsDir = "\(homeDir)/dev/codex-tools"
-  private lazy var typingDir = "\(homeDir)/Documents/develop/Feather Touch Typing"
+  private lazy var typingDir = "\(homeDir)/dev/Feather Touch Typing"
   private lazy var credentialsPath = ProcessInfo.processInfo.environment["GOOGLE_APPLICATION_CREDENTIALS"]
     ?? "\(homeDir)/.config/gcp/codex-tools-firestore-sa.json"
   private let hushLogPath = "/tmp/hush-pointer-dev.log"
