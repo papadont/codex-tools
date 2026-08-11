@@ -10,6 +10,10 @@ const { GoogleAuth } = require("google-auth-library");
 const { createAdapterRegistry } = require("./adapter_registry");
 const { loadEnvFromCandidates } = require("./load_env");
 const { createMemoService } = require("./memo_service");
+const {
+  createMemoResponseCache,
+  loadThroughMemoResponseCache
+} = require("./memo_response_cache");
 const { normalizeAttachments } = require("./memo_sync_service");
 const { normalizeStorageKind, resolveRuntimeConfig } = require("./runtime_config");
 const UsageOverviewShared = require("../codex-memo-web/public/usage_overview_shared");
@@ -19,7 +23,19 @@ loadEnvFromCandidates();
 const PORT = Number(process.env.PORT || 4173);
 const COLLECTION = "codex-memo";
 const ALLOWED_MEMO_TYPES = new Set(["handover memo", "memo", "propomemo", "keep"]);
-const CACHE_TTL_MS = Number(process.env.MEMO_CACHE_TTL_MS || 15_000);
+const LEGACY_MEMO_CACHE_TTL_MS = process.env.MEMO_CACHE_TTL_MS;
+const MEMO_LIST_CACHE_TTL_MS = Number(
+  process.env.MEMO_LIST_CACHE_TTL_MS || LEGACY_MEMO_CACHE_TTL_MS || 10 * 60_000
+);
+const MEMO_DETAIL_CACHE_TTL_MS = Number(
+  process.env.MEMO_DETAIL_CACHE_TTL_MS || LEGACY_MEMO_CACHE_TTL_MS || 24 * 60 * 60_000
+);
+const MEMO_COUNT_CACHE_TTL_MS = Number(
+  process.env.MEMO_COUNT_CACHE_TTL_MS || LEGACY_MEMO_CACHE_TTL_MS || 10 * 60_000
+);
+const MEMO_ATTACHMENT_CACHE_TTL_MS = Number(
+  process.env.MEMO_ATTACHMENT_CACHE_TTL_MS || LEGACY_MEMO_CACHE_TTL_MS || 10 * 60_000
+);
 const USAGE_CACHE_TTL_MS = Number(process.env.USAGE_CACHE_TTL_MS || 180_000);
 const CODEX_USAGE_CACHE_TTL_MS = Number(process.env.CODEX_USAGE_CACHE_TTL_MS || 30_000);
 const STORAGE_USAGE_CACHE_TTL_MS = Number(process.env.STORAGE_USAGE_CACHE_TTL_MS || 180_000);
@@ -72,24 +88,15 @@ const STORAGE_REQUEST_COUNT_CANDIDATES = [
   "storage.googleapis.com/api/request_count"
 ];
 
-const cacheStore = new Map();
+const cacheStore = createMemoResponseCache();
 const runtimeConfig = resolveRuntimeConfig(process.argv.slice(2), process.env);
 
 function getCache(key) {
-  const entry = cacheStore.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    cacheStore.delete(key);
-    return null;
-  }
-  return entry.value;
+  return cacheStore.get(key);
 }
 
-function setCache(key, value, ttlMs = CACHE_TTL_MS) {
-  cacheStore.set(key, {
-    value,
-    expiresAt: Date.now() + Math.max(1, ttlMs)
-  });
+function setCache(key, value, ttlMs = MEMO_LIST_CACHE_TTL_MS) {
+  cacheStore.set(key, value, ttlMs);
 }
 
 function clearCache() {
@@ -2117,7 +2124,13 @@ async function main() {
       usageOverviewSummaryModel: getUsageOverviewSummaryModelChainLabel(),
       usageOverviewSummaryModelChain: getUsageOverviewSummaryModels(),
       hasOpenAiSummaryKey: Boolean(getOpenAIApiKey()),
-      hasGeminiSummaryKey: Boolean(getGeminiApiKey())
+      hasGeminiSummaryKey: Boolean(getGeminiApiKey()),
+      memoCachePolicy: {
+        listTtlMs: MEMO_LIST_CACHE_TTL_MS,
+        detailTtlMs: MEMO_DETAIL_CACHE_TTL_MS,
+        countTtlMs: MEMO_COUNT_CACHE_TTL_MS,
+        attachmentTtlMs: MEMO_ATTACHMENT_CACHE_TTL_MS
+      }
     });
   });
 
@@ -2129,17 +2142,16 @@ async function main() {
       const storageKind = String(req.query.storageKind || "").trim().toLowerCase();
       const q = String(req.query.q || "").trim().toLowerCase();
       const noCache = String(req.query.nocache || "").trim() === "1";
-      const cacheKey = `list:${JSON.stringify({ limit, projectName, memoType, storageKind, q, allowedAdapters: runtimeConfig.allowedAdapters })}`;
-      if (!noCache) {
-        const cached = getCache(cacheKey);
-        if (cached) {
-          res.setHeader("X-Cache", "HIT");
-          res.json(cached);
-          return;
-        }
-      }
-
-      let memos = await memoService.listMemos(limit);
+      const cacheKey = `list-source:${JSON.stringify({ limit, allowedAdapters: runtimeConfig.allowedAdapters })}`;
+      const loaded = await loadThroughMemoResponseCache({
+        cache: cacheStore,
+        key: cacheKey,
+        ttlMs: MEMO_LIST_CACHE_TTL_MS,
+        forceReload: noCache,
+        loader: () => memoService.listMemos(limit)
+      });
+      const sourceMemos = loaded.value;
+      let memos = [...sourceMemos];
 
       if (projectName) {
         memos = memos.filter((memo) => memo.projectName.toLowerCase().includes(projectName));
@@ -2169,10 +2181,10 @@ async function main() {
       });
 
       const payload = { items: memos };
-      if (!noCache) {
-        setCache(cacheKey, payload);
+      for (const item of sourceMemos) {
+        setCache(`detail:${item.id}`, { item }, MEMO_DETAIL_CACHE_TTL_MS);
       }
-      res.setHeader("X-Cache", "MISS");
+      res.setHeader("X-Cache", loaded.cacheHit ? "HIT" : "MISS");
       res.json(payload);
     } catch (error) {
       res.status(500).json({ error: error.message || "Failed to fetch memos." });
@@ -2183,20 +2195,15 @@ async function main() {
     try {
       const noCache = String(req.query.nocache || "").trim() === "1";
       const cacheKey = "memo-counts";
-      if (!noCache) {
-        const cached = getCache(cacheKey);
-        if (cached) {
-          res.setHeader("X-Cache", "HIT");
-          res.json(cached);
-          return;
-        }
-      }
-      const payload = { counts: await memoService.countMemosByStorageKind() };
-      if (!noCache) {
-        setCache(cacheKey, payload);
-      }
-      res.setHeader("X-Cache", "MISS");
-      res.json(payload);
+      const loaded = await loadThroughMemoResponseCache({
+        cache: cacheStore,
+        key: cacheKey,
+        ttlMs: MEMO_COUNT_CACHE_TTL_MS,
+        forceReload: noCache,
+        loader: async () => ({ counts: await memoService.countMemosByStorageKind() })
+      });
+      res.setHeader("X-Cache", loaded.cacheHit ? "HIT" : "MISS");
+      res.json(loaded.value);
     } catch (error) {
       res.status(500).json({ error: error.message || "Failed to count memos." });
     }
@@ -2302,22 +2309,21 @@ async function main() {
   app.get("/api/memos/:id", async (req, res) => {
     try {
       const cacheKey = `detail:${req.params.id}`;
-      const cached = getCache(cacheKey);
-      if (cached) {
-        res.setHeader("X-Cache", "HIT");
-        res.json(cached);
-        return;
-      }
-
-      const item = await memoService.getMemo(req.params.id);
+      const noCache = String(req.query.nocache || "").trim() === "1";
+      const loaded = await loadThroughMemoResponseCache({
+        cache: cacheStore,
+        key: cacheKey,
+        ttlMs: MEMO_DETAIL_CACHE_TTL_MS,
+        forceReload: noCache,
+        loader: async () => ({ item: await memoService.getMemo(req.params.id) })
+      });
+      const item = loaded.value.item;
       if (!item) {
         res.status(404).json({ error: "Memo not found." });
         return;
       }
-      const payload = { item };
-      setCache(cacheKey, payload);
-      res.setHeader("X-Cache", "MISS");
-      res.json(payload);
+      res.setHeader("X-Cache", loaded.cacheHit ? "HIT" : "MISS");
+      res.json(loaded.value);
     } catch (error) {
       res.status(500).json({ error: error.message || "Failed to fetch memo." });
     }
@@ -2419,7 +2425,13 @@ async function main() {
 
   app.get("/api/memos/:id/attachments/:attachmentId", async (req, res) => {
     try {
-      const memo = await memoService.getMemo(req.params.id);
+      const memoPayload = await loadThroughMemoResponseCache({
+        cache: cacheStore,
+        key: `detail:${req.params.id}`,
+        ttlMs: MEMO_DETAIL_CACHE_TTL_MS,
+        loader: async () => ({ item: await memoService.getMemo(req.params.id) })
+      });
+      const memo = memoPayload.value.item;
       if (!memo) {
         res.status(404).json({ error: "Memo not found." });
         return;
@@ -2430,12 +2442,17 @@ async function main() {
         return;
       }
 
-      const adapter = adapterRegistry.getAdapter(memo.storageKind);
-      const resolved = await adapter.resolveAttachmentUrl({
-        memoId: memo.id,
-        attachmentId: attachment.id,
-        attachment
+      const resolvedPayload = await loadThroughMemoResponseCache({
+        cache: cacheStore,
+        key: `attachment:${memo.id}:${attachment.id}`,
+        ttlMs: MEMO_ATTACHMENT_CACHE_TTL_MS,
+        loader: () => adapterRegistry.getAdapter(memo.storageKind).resolveAttachmentUrl({
+          memoId: memo.id,
+          attachmentId: attachment.id,
+          attachment
+        })
       });
+      const resolved = resolvedPayload.value;
       if (!resolved) {
         res.status(404).json({ error: "Attachment file not found." });
         return;
@@ -2515,7 +2532,13 @@ async function main() {
         return;
       }
 
-      const memo = await memoService.getMemo(req.params.id);
+      const memoPayload = await loadThroughMemoResponseCache({
+        cache: cacheStore,
+        key: `detail:${req.params.id}`,
+        ttlMs: MEMO_DETAIL_CACHE_TTL_MS,
+        loader: async () => ({ item: await memoService.getMemo(req.params.id) })
+      });
+      const memo = memoPayload.value.item;
       if (!memo) {
         res.status(404).json({ error: "Memo not found." });
         return;

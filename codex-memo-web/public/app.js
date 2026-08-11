@@ -18,6 +18,7 @@ const state = {
   editorStorageKind: "firebase",
   hasInitialAutoSelection: false,
   lastResponseCacheHit: false,
+  listResponseCacheHit: false,
   selectedCacheHit: false,
   showOnlyDeletable: false,
   storageFilterKind: "",
@@ -5000,6 +5001,7 @@ async function loadMemos(options = {}) {
     if (forceReload) params.set("nocache", "1");
 
     const data = await request(`/api/memos?${params.toString()}`);
+    state.listResponseCacheHit = state.lastResponseCacheHit;
     state.items = data.items || [];
     const markdownCssMemo = state.items.find((item) =>
       isMarkdownCssMemoItem(item),
@@ -5022,7 +5024,7 @@ async function loadMemos(options = {}) {
         setStatus(`Quick Memo create error: ${error.message || error}`, true);
       });
     }
-    const listFromCache = state.lastResponseCacheHit;
+    const listFromCache = state.listResponseCacheHit;
     const visibleItems = getVisibleItemsSorted();
     if (selectFirst && visibleItems.length > 0) {
       fillEditor(visibleItems[0], { fromCache: listFromCache });
@@ -5075,6 +5077,17 @@ async function loadMemos(options = {}) {
 async function loadMemo(id) {
   try {
     if (!confirmDiscardEditorChanges()) return;
+    const existing = state.items.find((item) => item.id === id);
+    if (existing) {
+      fillEditor(
+        isQuickMemoItem(existing) ? normalizeQuickMemoItem(existing) : existing,
+        {
+          fromCache: state.listResponseCacheHit,
+          editorStorageKind: existing.storageKind,
+        },
+      );
+      return;
+    }
     const data = await request(`/api/memos/${encodeURIComponent(id)}`);
     fillEditor(
       isQuickMemoItem(data.item)
@@ -5801,7 +5814,13 @@ function initEvents() {
     setStatus("New memo mode");
   });
   el.appTitle.addEventListener("dblclick", async () => {
-    window.location.reload();
+    if (!confirmDiscardEditorChanges()) return;
+    try {
+      await loadMemos({ forceReload: true });
+      setStatus("Memos refreshed from Firebase", false, "force");
+    } catch (error) {
+      setStatus(`Load error: ${error.message || error}`, true);
+    }
   });
 
   const onFilterEnter = (ev) => {

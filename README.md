@@ -117,6 +117,17 @@ npm run memo:web:icloud
 npm run memo:web:firebase
 ```
 
+Firestore readを抑えるため、一覧と件数は10分、詳細は24時間、attachment解決結果は10分、
+ローカルWebサーバーのメモリへ保持する。検索とfilterは同じ一覧snapshotを再利用する。
+画面タイトルをダブルクリックするとFirebaseから強制再読込し、その結果でcacheを更新する。
+TTLは必要に応じて次の環境変数（milliseconds）で上書きできる。
+
+- `MEMO_LIST_CACHE_TTL_MS`
+- `MEMO_DETAIL_CACHE_TTL_MS`
+- `MEMO_COUNT_CACHE_TTL_MS`
+- `MEMO_ATTACHMENT_CACHE_TTL_MS`
+- 互換用の`MEMO_CACHE_TTL_MS`は上記すべてのfallbackとして扱う
+
 Storage 接続確認:
 ```bash
 npm run firebase:storage:check
