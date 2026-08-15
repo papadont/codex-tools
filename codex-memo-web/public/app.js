@@ -365,6 +365,7 @@ const el = {
   memoPreview: document.getElementById("memoPreview"),
   dateText: document.getElementById("dateText"),
   saveBtn: document.getElementById("saveBtn"),
+  archiveBtn: document.getElementById("archiveBtn"),
   deleteBtn: document.getElementById("deleteBtn"),
   downloadFormatSelect: document.getElementById("downloadFormatSelect"),
   downloadBtn: document.getElementById("downloadBtn"),
@@ -4841,6 +4842,7 @@ function fillEditor(item, options = {}) {
   state.editorBaseline = isReadOnlyPanel ? null : currentEditorSnapshot();
   updateSaveButtonState();
   el.deleteBtn.disabled = isReadOnlyPanel;
+  el.archiveBtn.disabled = isReadOnlyPanel || isQuickMemo || isMarkdownCssMemo || !normalizedItem || normalizedItem.storageKind !== "firebase";
   // Export actions are allowed for usage panels as read-only snapshots.
   el.downloadFormatSelect.disabled = false;
   el.downloadBtn.disabled = false;
@@ -4854,6 +4856,9 @@ function fillEditor(item, options = {}) {
       : state.showOnlyDeletable
         ? "ALL: delete all deletable docs (Shift: filter off)"
         : "ALL: delete all deletable docs (Shift: filter on)";
+  el.archiveBtn.title = el.archiveBtn.disabled
+    ? "Archive is available for a selected Firebase memo"
+    : "Export locally, verify, then remove from Firebase";
   setBodyMode(options.bodyMode || "preview");
   updateBodyMode();
   renderList();
@@ -5209,6 +5214,47 @@ async function deleteSelectedMemo() {
     setStatus(`Deleted: ${selected.id}`, false, "force");
   } catch (error) {
     setStatus(`Delete error: ${error.message}`, true);
+  }
+}
+
+async function archiveSelectedMemo() {
+  const selected = state.items.find((memo) => memo.id === state.selectedId);
+  if (!selected) {
+    setStatus("Select a Firebase memo to archive", true);
+    return;
+  }
+  if (selected.pinned) {
+    setStatus("Archive blocked: unpin first", true);
+    return;
+  }
+  if (selected.storageKind !== "firebase") {
+    setStatus("Archive is available only for Firebase memos", true);
+    return;
+  }
+  if (!selected.deletable) {
+    setStatus("Archive blocked: turn DEL on first", true);
+    return;
+  }
+  const ok = window.confirm(
+    `Archive locally, verify files, then remove this memo from Firebase? (${selected.id})`,
+  );
+  if (!ok) {
+    setStatus("Archive cancelled", true);
+    return;
+  }
+  try {
+    const data = await request(`/api/memos/${encodeURIComponent(selected.id)}/archive`, {
+      method: "POST",
+      headers: {
+        "x-codex-archive-confirm": "DELETE",
+        "x-codex-expected-updated-at": selected.updatedAtISO || "",
+      },
+    });
+    fillEditor(null);
+    await loadMemos({ forceReload: true, selectFirst: true });
+    setStatus(`Archived locally: ${data.archivePath}`, false, "force");
+  } catch (error) {
+    setStatus(`Archive error: ${error.message}`, true);
   }
 }
 
@@ -6077,6 +6123,7 @@ function initEvents() {
   el.memoTypeInput.addEventListener("change", updateSaveButtonState);
 
   el.saveBtn.addEventListener("click", saveMemo);
+  el.archiveBtn.addEventListener("click", archiveSelectedMemo);
   el.deleteBtn.addEventListener("click", deleteMemo);
   el.downloadBtn.addEventListener("click", () =>
     downloadMemo(el.downloadFormatSelect.value || "txt"),

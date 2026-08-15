@@ -262,7 +262,7 @@ async function readPathIfExists(targetPath) {
   }
 }
 
-function createServiceContext({ docs = {}, icloudDir, bucket, bucketName = "test-bucket" }) {
+function createServiceContext({ docs = {}, icloudDir, archiveBaseDir, bucket, bucketName = "test-bucket" }) {
   const admin = createAdminMock(bucket);
   const adapterRegistry = createAdapterRegistry({
     icloud: { baseDir: icloudDir },
@@ -278,10 +278,76 @@ function createServiceContext({ docs = {}, icloudDir, bucket, bucketName = "test
     },
     adapterRegistry,
     admin,
-    toMemoDto
+    toMemoDto,
+    archiveBaseDir
   });
   return { admin, adapterRegistry, db, memoService };
 }
+
+test("Firebase memo archive verifies a portable local package before deleting Firebase data", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memo-archive-"));
+  const archiveBaseDir = path.join(root, "archive");
+  const bucket = new FakeBucket();
+  const memoId = "memo_archive_demo";
+  const attachmentId = "att_archive_demo";
+  const updatedAtISO = "2026-08-15T01:00:00.000Z";
+  const { memoService, adapterRegistry } = createServiceContext({
+    docs: {
+      [memoId]: {
+        projectName: "codex-tools",
+        memoType: "memo",
+        memoBody: "![archive](attachment://att_archive_demo)",
+        threadTitle: "archive test",
+        storageKind: "firebase",
+        attachments: [],
+        createdAtISO: updatedAtISO,
+        updatedAtISO
+      }
+    },
+    archiveBaseDir,
+    bucket
+  });
+  const attachment = await adapterRegistry.getAdapter("firebase").saveAttachment({
+    memoId,
+    attachmentId,
+    fileName: "archive.png",
+    mimeType: "image/png",
+    bytes: Buffer.from("archive bytes")
+  });
+  await memoService.updateMemo(memoId, {
+    projectName: "codex-tools",
+    memoType: "memo",
+    memoBody: "![archive](attachment://att_archive_demo)",
+    threadTitle: "archive test",
+    storageKind: "firebase",
+    attachments: [attachment]
+  });
+  const current = await memoService.getMemo(memoId);
+
+  const archived = await memoService.archiveMemo(memoId, {
+    expectedUpdatedAtISO: current.updatedAtISO
+  });
+
+  assert.equal(archived.status, "archived");
+  assert.equal(archived.deleted, true);
+  assert.equal(await memoService.getMemo(memoId), null);
+  assert.equal(bucket.objects.size, 0);
+  const manifest = JSON.parse(await fs.readFile(path.join(archived.archivePath, "manifest.json"), "utf8"));
+  const metadata = JSON.parse(await fs.readFile(path.join(archived.archivePath, "metadata.json"), "utf8"));
+  assert.equal(manifest.memoId, memoId);
+  assert.deepEqual(manifest.files.map((entry) => entry.path).sort(), [
+    "attachments/att_archive_demo.png",
+    "memo.md",
+    "metadata.json"
+  ]);
+  assert.equal(metadata.memo.attachments[0].storagePath, undefined);
+  assert.equal(metadata.memo.attachments[0].archivePath, "attachments/att_archive_demo.png");
+  assert.equal(
+    await fs.readFile(path.join(archived.archivePath, "attachments", "att_archive_demo.png"), "utf8"),
+    "archive bytes"
+  );
+  await fs.rm(root, { recursive: true, force: true });
+});
 
 test("iCloud -> Firebase migration rewrites attachment metadata and removes source files", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memo-service-"));

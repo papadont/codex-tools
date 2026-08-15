@@ -1,11 +1,18 @@
 "use strict";
 
 const { createHash } = require("node:crypto");
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
 const { normalizeStorageKind } = require("./runtime_config");
+const { extensionFromMimeType } = require("./storage_adapters/local_adapter");
 const { normalizeAttachments, syncMemoBodyAndAttachments } = require("./memo_sync_service");
 
-function createMemoService({ db, collection, runtimeConfig, adapterRegistry, admin, toMemoDto }) {
+function createMemoService({ db, collection, runtimeConfig, adapterRegistry, admin, toMemoDto, archiveBaseDir }) {
   const sitesIdempotencyCollection = `${collection}-sites-idempotency-v1`;
+  const resolvedArchiveBaseDir = archiveBaseDir
+    || process.env.CODEX_MEMO_ARCHIVE_DIR
+    || path.join(os.homedir(), "Documents", "CodexMemo Archive");
 
   function sitesReceiptId(kind, key) {
     return createHash("sha256").update(`${kind}\0${key}`).digest("hex");
@@ -628,6 +635,105 @@ function createMemoService({ db, collection, runtimeConfig, adapterRegistry, adm
     return true;
   }
 
+  function safeArchiveSegment(value, fallback) {
+    const normalized = String(value || "").trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+    return normalized || fallback;
+  }
+
+  function archiveFileEntry(relativePath, bytes) {
+    return {
+      path: relativePath,
+      bytes: bytes.byteLength,
+      sha256: createHash("sha256").update(bytes).digest("hex")
+    };
+  }
+
+  async function verifyArchiveFiles(root, files) {
+    for (const entry of files) {
+      const bytes = await fs.readFile(path.join(root, entry.path));
+      const actual = archiveFileEntry(entry.path, bytes);
+      if (actual.bytes !== entry.bytes || actual.sha256 !== entry.sha256) {
+        throw new Error(`Archive verification failed for ${entry.path}.`);
+      }
+    }
+  }
+
+  async function archiveMemo(id, { expectedUpdatedAtISO } = {}) {
+    const current = await getMemo(id);
+    if (!current) return { status: "missing" };
+    if (current.storageKind !== "firebase") {
+      throw new Error("Archive is available only for Firebase memos.");
+    }
+    if (expectedUpdatedAtISO && String(current.updatedAtISO || "") !== String(expectedUpdatedAtISO)) {
+      return { status: "conflict", current };
+    }
+
+    const now = new Date();
+    const memoSegment = safeArchiveSegment(id, createHash("sha256").update(String(id)).digest("hex").slice(0, 12));
+    const archiveDir = path.join(
+      resolvedArchiveBaseDir,
+      String(now.getFullYear()),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      memoSegment
+    );
+    const stagingDir = `${archiveDir}.tmp-${process.pid}-${Date.now()}`;
+    const attachmentDir = path.join(stagingDir, "attachments");
+    const firebaseAdapter = adapterRegistry.getAdapter("firebase");
+
+    try {
+      await fs.mkdir(attachmentDir, { recursive: true });
+      const memoBody = Buffer.from(String(current.memoBody || ""), "utf8");
+      await fs.writeFile(path.join(stagingDir, "memo.md"), memoBody);
+      const files = [archiveFileEntry("memo.md", memoBody)];
+      const archivedAttachments = [];
+
+      for (const attachment of current.attachments || []) {
+        const attachmentId = safeArchiveSegment(attachment.id, createHash("sha256").update(JSON.stringify(attachment)).digest("hex").slice(0, 12));
+        const relativePath = path.posix.join("attachments", `${attachmentId}.${extensionFromMimeType(attachment.mimeType)}`);
+        const bytes = await firebaseAdapter.downloadAttachment({
+          memoId: id,
+          attachmentId: attachment.id,
+          attachment
+        });
+        await fs.writeFile(path.join(stagingDir, relativePath), bytes);
+        files.push(archiveFileEntry(relativePath, bytes));
+        const { storagePath, ...portableAttachment } = attachment;
+        archivedAttachments.push({ ...portableAttachment, archivePath: relativePath });
+      }
+
+      const metadata = {
+        schemaVersion: 1,
+        archivedAtISO: now.toISOString(),
+        source: "firebase",
+        memo: { ...current, attachments: archivedAttachments }
+      };
+      const metadataBytes = Buffer.from(`${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+      await fs.writeFile(path.join(stagingDir, "metadata.json"), metadataBytes);
+      files.push(archiveFileEntry("metadata.json", metadataBytes));
+      const manifest = {
+        schemaVersion: 1,
+        memoId: id,
+        archivedAtISO: now.toISOString(),
+        files
+      };
+      await fs.writeFile(path.join(stagingDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+      await verifyArchiveFiles(stagingDir, files);
+      await fs.mkdir(path.dirname(archiveDir), { recursive: true });
+      await fs.rename(stagingDir, archiveDir);
+    } catch (error) {
+      await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
+
+    const latest = await getMemo(id);
+    if (!latest) return { status: "archived", archivePath: archiveDir, deleted: true };
+    if (String(latest.updatedAtISO || "") !== String(current.updatedAtISO || "")) {
+      return { status: "conflict", current: latest, archivePath: archiveDir, deleted: false };
+    }
+    await deleteMemo(id);
+    return { status: "archived", archivePath: archiveDir, deleted: true };
+  }
+
   return {
     resolveCreateStorageKind,
     isAllowedStorageKind,
@@ -642,7 +748,8 @@ function createMemoService({ db, collection, runtimeConfig, adapterRegistry, adm
     deleteAttachmentIfUnchanged,
     updateTextMemoIfUnchanged,
     updateMemo,
-    deleteMemo
+    deleteMemo,
+    archiveMemo
   };
 }
 

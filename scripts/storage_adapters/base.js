@@ -29,6 +29,10 @@ class StorageAdapter {
     return null;
   }
 
+  async downloadAttachment(_input) {
+    throw new Error(`downloadAttachment is not implemented for ${this.kind}`);
+  }
+
   async copyMemoTo(_targetAdapter, _memoId) {
     throw new Error(`copyMemoTo is not implemented for ${this.kind}`);
   }

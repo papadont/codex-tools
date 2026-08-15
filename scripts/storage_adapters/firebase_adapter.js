@@ -90,6 +90,16 @@ class FirebaseAdapter extends StorageAdapter {
     return url;
   }
 
+  async downloadAttachment(input) {
+    const objectPath = String(
+      input?.attachment?.storagePath
+      || this.attachmentPath(input.memoId, input.attachmentId, input?.attachment?.mimeType)
+    );
+    if (!objectPath) throw new Error("Attachment storage path is missing.");
+    const [bytes] = await this.bucket().file(objectPath).download();
+    return Buffer.from(bytes);
+  }
+
   async deleteMemo(memoId) {
     const [files] = await this.bucket().getFiles({
       prefix: `memos/${memoId}/`

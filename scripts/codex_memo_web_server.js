@@ -2423,6 +2423,39 @@ async function main() {
     }
   });
 
+  app.post("/api/memos/:id/archive", async (req, res) => {
+    try {
+      const ref = db.collection(COLLECTION).doc(req.params.id);
+      const exists = await ref.get();
+      if (!exists.exists) {
+        res.status(404).json({ error: "Memo not found." });
+        return;
+      }
+      const current = exists.data() || {};
+      memoService.assertAllowedStorageKind(normalizeStorageKind(current.storageKind, "firebase"));
+      assertDeleteAllowed(current, req.get("x-codex-archive-confirm"));
+      const result = await memoService.archiveMemo(req.params.id, {
+        expectedUpdatedAtISO: req.get("x-codex-expected-updated-at") || undefined
+      });
+      if (result.status === "missing") {
+        res.status(404).json({ error: "Memo not found." });
+        return;
+      }
+      if (result.status === "conflict") {
+        res.status(409).json({
+          error: "Memo changed while archiving. Firebase was kept.",
+          archivePath: result.archivePath,
+          item: result.current
+        });
+        return;
+      }
+      clearCache();
+      res.json({ ok: true, archivePath: result.archivePath });
+    } catch (error) {
+      res.status(400).json({ error: error.message || "Failed to archive memo." });
+    }
+  });
+
   app.get("/api/memos/:id/attachments/:attachmentId", async (req, res) => {
     try {
       const memoPayload = await loadThroughMemoResponseCache({
